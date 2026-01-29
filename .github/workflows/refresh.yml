@@ -57,6 +57,8 @@ jobs:
       # ─────────────────────────────────────────────────────────────────────
       # 6. Gate horario: solo ejecutar si es >= 19:00 Europe/Madrid
       #    y no se ha ejecutado hoy
+      #    IMPORTANTE: este step SIEMPRE termina con exit 0
+      #    y comunica si toca correr via steps.gate.outputs.run
       # ─────────────────────────────────────────────────────────────────────
       - name: Check time gate (Europe/Madrid >= 19:00)
         id: gate
@@ -86,35 +88,36 @@ jobs:
               ? fs.readFileSync(stampFile, 'utf8').trim()
               : '';
 
+            // Condiciones: hora >= 19 Y no se ha ejecutado hoy
+            const shouldRun = hour >= 19 && lastRefresh !== today;
+
             console.log('=== TIME GATE CHECK ===');
             console.log('Europe/Madrid time:', obj.hour + ':' + obj.minute);
             console.log('Today (Madrid):', today);
             console.log('Last refresh:', lastRefresh || '(never)');
-
-            // Condiciones: hora >= 19 Y no se ha ejecutado hoy
-            const shouldRun = hour >= 19 && lastRefresh !== today;
-
             console.log('Hour >= 19?', hour >= 19);
             console.log('Not refreshed today?', lastRefresh !== today);
             console.log('Should run?', shouldRun);
 
+            // Exportar output para condicionar el resto de steps
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'run=' + (shouldRun ? 'true' : 'false') + '\\n');
+
             if (shouldRun) {
-              // Escribir fecha de hoy para evitar re-ejecución
               fs.writeFileSync(stampFile, today);
               console.log('Gate PASSED - proceeding with refresh');
-              process.exit(0);
             } else {
-              console.log('Gate BLOCKED - skipping refresh');
-              process.exit(2);
+              console.log('Gate BLOCKED - skipping refresh (expected)');
             }
+
+            // SIEMPRE exit 0 => no emails de failure
+            process.exit(0);
           "
-        continue-on-error: true
 
       # ─────────────────────────────────────────────────────────────────────
       # 7. Validar que existe el secret LI_STATE_B64
       # ─────────────────────────────────────────────────────────────────────
       - name: Validate LI_STATE_B64 secret
-        if: steps.gate.outcome == 'success'
+        if: steps.gate.outputs.run == 'true'
         env:
           LI_STATE_B64: ${{ secrets.LI_STATE_B64 }}
         run: |
@@ -133,7 +136,7 @@ jobs:
       # 8. Reconstruir state/linkedin.json desde secret
       # ─────────────────────────────────────────────────────────────────────
       - name: Restore LinkedIn session from secret
-        if: steps.gate.outcome == 'success'
+        if: steps.gate.outputs.run == 'true'
         env:
           LI_STATE_B64: ${{ secrets.LI_STATE_B64 }}
         run: |
@@ -161,7 +164,7 @@ jobs:
       # 9. Ejecutar scraper con display virtual (modo headed para reducir checkpoint)
       # ─────────────────────────────────────────────────────────────────────
       - name: Fetch LinkedIn Top 3
-        if: steps.gate.outcome == 'success'
+        if: steps.gate.outputs.run == 'true'
         env:
           CI_HEADFUL: "1"
         run: xvfb-run -a npm run fetch
@@ -170,7 +173,7 @@ jobs:
       # 10. Commit y push de los cambios
       # ─────────────────────────────────────────────────────────────────────
       - name: Commit and push changes
-        if: steps.gate.outcome == 'success'
+        if: steps.gate.outputs.run == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -194,8 +197,8 @@ jobs:
         if: always()
         run: |
           echo "=== WORKFLOW SUMMARY ==="
-          echo "Gate outcome: ${{ steps.gate.outcome }}"
-          if [ "${{ steps.gate.outcome }}" == "success" ]; then
+          echo "Gate run?: ${{ steps.gate.outputs.run }}"
+          if [ "${{ steps.gate.outputs.run }}" == "true" ]; then
             echo "Refresh was executed"
           else
             echo "Refresh was skipped (gate blocked)"
