@@ -1,8 +1,10 @@
 /**
  * fetch_top3.mjs
  *
- * Extrae posts de LinkedIn usando sesión persistida y genera public/data.json
- * con el top 3 por interacciones (likes + comments + reposts).
+ * Extrae posts de LinkedIn usando sesión persistida y genera:
+ * - public/data.json: top 3 del día
+ * - public/history.json: histórico acumulado de posts
+ * - public/top10.json: top 10 all-time por engagement
  *
  * Uso: npm run fetch
  * Requisito: ejecutar primero npm run login
@@ -14,7 +16,7 @@
  */
 
 import { chromium } from 'playwright';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,6 +25,8 @@ import { existsSync } from 'node:fs';
 
 const STATE_PATH = 'state/linkedin.json';
 const OUTPUT_PATH = 'public/data.json';
+const HISTORY_PATH = 'public/history.json';
+const TOP10_PATH = 'public/top10.json';
 const DEBUG_DIR = 'debug';
 
 /**
@@ -148,6 +152,81 @@ function extractNumberFromAriaLabel(ariaLabel) {
 function normalizeUrl(url) {
   if (!url) return '';
   return url.split('?')[0];
+}
+
+/**
+ * Calcula score de engagement (likes + comments)
+ */
+function calcScore(post) {
+  return (post.likes || 0) + (post.comments || 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTÓRICO Y TOP 10
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Carga el histórico existente o devuelve array vacío
+ */
+async function loadHistory() {
+  try {
+    if (!existsSync(HISTORY_PATH)) {
+      return [];
+    }
+    const content = await readFile(HISTORY_PATH, 'utf8');
+    const data = JSON.parse(content);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Añade posts al histórico, deduplica por URL normalizada
+ * @param {Array} history - Histórico existente
+ * @param {Array} newPosts - Posts nuevos del día
+ * @param {string} date - Fecha YYYY-MM-DD
+ * @returns {Array} Histórico actualizado
+ */
+function mergeHistory(history, newPosts, date) {
+  // Crear set de URLs ya en histórico
+  const seenUrls = new Set(history.map(p => normalizeUrl(p.url)));
+
+  // Añadir posts nuevos con fecha
+  for (const post of newPosts) {
+    const normalized = normalizeUrl(post.url);
+    if (!seenUrls.has(normalized)) {
+      seenUrls.add(normalized);
+      history.push({
+        ...post,
+        date, // Añadir fecha de captura
+      });
+    }
+  }
+
+  return history;
+}
+
+/**
+ * Genera top 10 all-time por score (likes + comments)
+ * @param {Array} history - Histórico completo
+ * @returns {Array} Top 10 posts como array puro
+ */
+function generateTop10(history) {
+  return history
+    .map(post => ({
+      url: post.url,
+      author: post.author || '',
+      snippet: post.snippet || '',
+      keyword: post.keyword || '',
+      date: post.date || '',
+      likes: post.likes || 0,
+      comments: post.comments || 0,
+      reposts: post.reposts || 0,
+      total: (post.likes || 0) + (post.comments || 0) + (post.reposts || 0),
+    }))
+    .sort((a, b) => calcScore(b) - calcScore(a))
+    .slice(0, 10);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -610,9 +689,9 @@ async function main() {
       return;
     }
 
-    // ─── SELECCIÓN DE TOP 3 ───
+    // ─── SELECCIÓN DE TOP 3 DEL DÍA ───
     console.log('\n' + '─'.repeat(60));
-    console.log('SELECCIÓN DE TOP 3');
+    console.log('SELECCIÓN DE TOP 3 DEL DÍA');
     console.log('─'.repeat(60));
 
     const postsWithMetrics = allPosts.filter(p => (p.total || 0) > 0);
@@ -636,14 +715,14 @@ async function main() {
       console.log('\n⚠️ No se encontraron posts válidos');
     }
 
-    console.log(`\n📊 Resumen:`);
+    console.log(`\n📊 Resumen del día:`);
     console.log(`   Posts totales recolectados: ${allPosts.length}`);
     console.log(`   Posts con métricas: ${postsWithMetrics.length}`);
     console.log(`   Posts sin métricas (con snippet): ${postsWithoutMetrics.length}`);
     console.log(`   Top 3 seleccionados: ${top3.length}`);
 
     if (top3.length > 0) {
-      console.log(`\n🏆 Top 3:`);
+      console.log(`\n🏆 Top 3 del día:`);
       top3.forEach((p, i) => {
         const metrics = (p.total || 0) > 0 ? `${p.total} interacciones` : `${(p.snippet || '').length} chars`;
         const authorDisplay = p.author || 'Autor desconocido';
@@ -651,19 +730,61 @@ async function main() {
       });
     }
 
-    // ─── ESCRIBIR OUTPUT ───
+    // ─── FECHA DE HOY ───
+    const today = new Date().toISOString().slice(0, 10);
+
+    // ─── ESCRIBIR data.json (TOP 3 DEL DÍA) ───
     const output = {
       lastUpdated: new Date().toISOString(),
-      date: new Date().toISOString().slice(0, 10),
+      date: today,
       keywords: HASHTAGS.map(h => `#${h}`),
       posts: top3,
     };
 
     await mkdir('public', { recursive: true });
     await writeFile(OUTPUT_PATH, JSON.stringify(output, null, 2), 'utf8');
-    wroteOutput = true;
+    console.log(`\n✅ Top 3 del día guardado en: ${OUTPUT_PATH}`);
 
-    console.log(`\n✅ Datos guardados en: ${OUTPUT_PATH}\n`);
+    // ─── ACTUALIZAR HISTÓRICO ───
+    console.log('\n' + '─'.repeat(60));
+    console.log('ACTUALIZANDO HISTÓRICO');
+    console.log('─'.repeat(60));
+
+    let history = await loadHistory();
+    const historyBefore = history.length;
+
+    // Añadir todos los posts del día (no solo top 3)
+    history = mergeHistory(history, allPosts, today);
+    const newPostsAdded = history.length - historyBefore;
+
+    await writeFile(HISTORY_PATH, JSON.stringify(history, null, 2), 'utf8');
+    console.log(`   📚 Histórico: ${historyBefore} → ${history.length} posts (+${newPostsAdded} nuevos)`);
+    console.log(`   ✅ Guardado en: ${HISTORY_PATH}`);
+
+    // ─── GENERAR TOP 10 ALL-TIME ───
+    console.log('\n' + '─'.repeat(60));
+    console.log('GENERANDO TOP 10 ALL-TIME');
+    console.log('─'.repeat(60));
+
+    const top10 = generateTop10(history);
+
+    // Escribir como ARRAY puro (no objeto)
+    await writeFile(TOP10_PATH, JSON.stringify(top10, null, 2), 'utf8');
+
+    console.log(`\n🏆 Top 10 All-Time:`);
+    top10.forEach((p, i) => {
+      const authorDisplay = p.author || 'Autor desconocido';
+      const score = calcScore(p);
+      console.log(`   ${i + 1}. ${authorDisplay} (score: ${score} = ${p.likes} likes + ${p.comments} comments) - ${p.date}`);
+    });
+
+    console.log(`\n✅ Top 10 guardado en: ${TOP10_PATH}`);
+
+    wroteOutput = true;
+    console.log('\n' + '═'.repeat(60));
+    console.log('✅ PROCESO COMPLETADO');
+    console.log('═'.repeat(60) + '\n');
+
   } finally {
     await browser.close().catch(() => {});
     if (!wroteOutput && process.exitCode === 2) {
