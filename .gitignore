@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# LinkedIn session (NUNCA commitear - contiene cookies de sesión)
+state/
+
+# macOS
+.DS_Store
+
+# Refresh gate (se gestiona en CI, no commitear manualmente)
+.last_refresh_date
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+
+# Environment variables (por si acaso)
+.env
+.env.local
+.env.*.local
+
+# Playwright
+test-results/
+playwright-report/
+
+# Debug output (HTML snapshots cuando falla el scraping)
+debug/

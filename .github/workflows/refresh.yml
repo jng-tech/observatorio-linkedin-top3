@@ -1,0 +1,192 @@
+name: Refresh LinkedIn Top3
+
+on:
+  # Ejecutar cada hora (el gate interno filtra solo 19:00+ Europe/Madrid)
+  schedule:
+    - cron: '0 * * * *'
+  # Permitir ejecución manual (útil para testing)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─────────────────────────────────────────────────────────────────────
+      # 1. Checkout del repositorio
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 2. Setup Node.js
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 3. Instalar dependencias
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 4. Instalar Playwright + Chromium
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 5. Gate horario: solo ejecutar si es >= 19:00 Europe/Madrid
+      #    y no se ha ejecutado hoy
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Check time gate (Europe/Madrid >= 19:00)
+        id: gate
+        run: |
+          node -e "
+            const fs = require('fs');
+
+            // Obtener hora y fecha en Europe/Madrid
+            const fmt = new Intl.DateTimeFormat('sv-SE', {
+              timeZone: 'Europe/Madrid',
+              hour: '2-digit',
+              minute: '2-digit',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            });
+
+            const parts = fmt.formatToParts(new Date());
+            const obj = Object.fromEntries(parts.map(p => [p.type, p.value]));
+
+            const hour = Number(obj.hour);
+            const today = obj.year + '-' + obj.month + '-' + obj.day;
+
+            // Leer última fecha de refresh
+            const stampFile = '.last_refresh_date';
+            const lastRefresh = fs.existsSync(stampFile)
+              ? fs.readFileSync(stampFile, 'utf8').trim()
+              : '';
+
+            console.log('=== TIME GATE CHECK ===');
+            console.log('Europe/Madrid time:', obj.hour + ':' + obj.minute);
+            console.log('Today (Madrid):', today);
+            console.log('Last refresh:', lastRefresh || '(never)');
+
+            // Condiciones: hora >= 19 Y no se ha ejecutado hoy
+            const shouldRun = hour >= 19 && lastRefresh !== today;
+
+            console.log('Hour >= 19?', hour >= 19);
+            console.log('Not refreshed today?', lastRefresh !== today);
+            console.log('Should run?', shouldRun);
+
+            if (shouldRun) {
+              // Escribir fecha de hoy para evitar re-ejecución
+              fs.writeFileSync(stampFile, today);
+              console.log('Gate PASSED - proceeding with refresh');
+              process.exit(0);
+            } else {
+              console.log('Gate BLOCKED - skipping refresh');
+              process.exit(2);
+            }
+          "
+        continue-on-error: true
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 6. Validar que existe el secret LI_STATE_B64
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Validate LI_STATE_B64 secret
+        if: steps.gate.outcome == 'success'
+        env:
+          LI_STATE_B64: ${{ secrets.LI_STATE_B64 }}
+        run: |
+          if [ -z "$LI_STATE_B64" ]; then
+            echo "::error::Secret LI_STATE_B64 is not defined!"
+            echo ""
+            echo "To fix this:"
+            echo "1. Run 'npm run login' locally"
+            echo "2. Encode the session: base64 -i state/linkedin.json"
+            echo "3. Add it as a GitHub Secret named LI_STATE_B64"
+            exit 1
+          fi
+          echo "LI_STATE_B64 secret is configured"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 7. Reconstruir state/linkedin.json desde secret
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Restore LinkedIn session from secret
+        if: steps.gate.outcome == 'success'
+        env:
+          LI_STATE_B64: ${{ secrets.LI_STATE_B64 }}
+        run: |
+          mkdir -p state
+
+          # Intentar base64 -d (Linux) o base64 --decode (fallback)
+          if echo "$LI_STATE_B64" | base64 -d > state/linkedin.json 2>/dev/null; then
+            echo "Session restored using base64 -d"
+          elif echo "$LI_STATE_B64" | base64 --decode > state/linkedin.json 2>/dev/null; then
+            echo "Session restored using base64 --decode"
+          else
+            echo "::error::Failed to decode LI_STATE_B64"
+            exit 1
+          fi
+
+          # Validar que es JSON válido
+          if ! node -e "JSON.parse(require('fs').readFileSync('state/linkedin.json','utf8'))"; then
+            echo "::error::LI_STATE_B64 does not contain valid JSON"
+            exit 1
+          fi
+
+          echo "LinkedIn session file created successfully"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 8. Ejecutar scraper
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Fetch LinkedIn Top 3
+        if: steps.gate.outcome == 'success'
+        run: npm run fetch
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 9. Commit y push de los cambios
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Commit and push changes
+        if: steps.gate.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Añadir archivos modificados
+          git add public/data.json .last_refresh_date
+
+          # Verificar si hay cambios para commitear
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Daily refresh $(TZ='Europe/Madrid' date +'%Y-%m-%d %H:%M') Madrid"
+            git push
+            echo "Changes committed and pushed successfully"
+          fi
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 10. Resumen final
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== WORKFLOW SUMMARY ==="
+          echo "Gate outcome: ${{ steps.gate.outcome }}"
+          if [ "${{ steps.gate.outcome }}" == "success" ]; then
+            echo "Refresh was executed"
+          else
+            echo "Refresh was skipped (gate blocked)"
+          fi

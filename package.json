@@ -1,0 +1,12 @@
+{
+  "name": "observatorio-linkedin-top3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login": "node scripts/login_once.mjs",
+    "fetch": "node scripts/fetch_top3.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
