@@ -53,6 +53,10 @@ const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 const VIEWPORT = { width: 1280, height: 900 };
 
+// CI_HEADFUL=1 fuerza modo headed (con display virtual xvfb en CI)
+// Esto reduce la probabilidad de checkpoint de LinkedIn
+const USE_HEADFUL = process.env.CI_HEADFUL === '1';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS "SAFE" (evitan crash si la página se cierra)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -532,9 +536,10 @@ async function main() {
   console.log(`🏷️  Hashtags: ${HASHTAGS.map(h => '#' + h).join(', ')}`);
   console.log(`🔍 Fallback: búsqueda de contenido si < ${MIN_POSTS_DESIRED} posts`);
   console.log(`📜 Scroll: ${SCROLL_COUNT}x por fuente, hasta ${CARDS_PER_SOURCE} cards`);
+  console.log(`🖥️  Modo: ${USE_HEADFUL ? 'HEADED (xvfb)' : 'headless'}`);
 
   const browser = await chromium.launch({
-    headless: true,
+    headless: !USE_HEADFUL,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--no-sandbox',

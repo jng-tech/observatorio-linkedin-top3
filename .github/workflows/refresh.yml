@@ -47,7 +47,15 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # ─────────────────────────────────────────────────────────────────────
-      # 5. Gate horario: solo ejecutar si es >= 19:00 Europe/Madrid
+      # 5. Instalar xvfb para display virtual (reduce checkpoint)
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 6. Gate horario: solo ejecutar si es >= 19:00 Europe/Madrid
       #    y no se ha ejecutado hoy
       # ─────────────────────────────────────────────────────────────────────
       - name: Check time gate (Europe/Madrid >= 19:00)
@@ -103,7 +111,7 @@ jobs:
         continue-on-error: true
 
       # ─────────────────────────────────────────────────────────────────────
-      # 6. Validar que existe el secret LI_STATE_B64
+      # 7. Validar que existe el secret LI_STATE_B64
       # ─────────────────────────────────────────────────────────────────────
       - name: Validate LI_STATE_B64 secret
         if: steps.gate.outcome == 'success'
@@ -122,7 +130,7 @@ jobs:
           echo "LI_STATE_B64 secret is configured"
 
       # ─────────────────────────────────────────────────────────────────────
-      # 7. Reconstruir state/linkedin.json desde secret
+      # 8. Reconstruir state/linkedin.json desde secret
       # ─────────────────────────────────────────────────────────────────────
       - name: Restore LinkedIn session from secret
         if: steps.gate.outcome == 'success'
@@ -150,14 +158,16 @@ jobs:
           echo "LinkedIn session file created successfully"
 
       # ─────────────────────────────────────────────────────────────────────
-      # 8. Ejecutar scraper
+      # 9. Ejecutar scraper con display virtual (modo headed para reducir checkpoint)
       # ─────────────────────────────────────────────────────────────────────
       - name: Fetch LinkedIn Top 3
         if: steps.gate.outcome == 'success'
-        run: npm run fetch
+        env:
+          CI_HEADFUL: "1"
+        run: xvfb-run -a npm run fetch
 
       # ─────────────────────────────────────────────────────────────────────
-      # 9. Commit y push de los cambios
+      # 10. Commit y push de los cambios
       # ─────────────────────────────────────────────────────────────────────
       - name: Commit and push changes
         if: steps.gate.outcome == 'success'
@@ -178,7 +188,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────────────────────
-      # 10. Resumen final
+      # 11. Resumen final
       # ─────────────────────────────────────────────────────────────────────
       - name: Summary
         if: always()
