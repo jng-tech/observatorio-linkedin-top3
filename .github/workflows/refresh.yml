@@ -178,8 +178,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Añadir archivos modificados (incluye histórico y top10)
-          git add public/data.json public/history.json public/top10.json .last_refresh_date
+          # Añadir archivos modificados (no falla si alguno no existe)
+          git add public/ .last_refresh_date
 
           # Verificar si hay cambios para commitear
           if git diff --cached --quiet; then
