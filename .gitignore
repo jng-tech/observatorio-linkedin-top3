@@ -7,8 +7,8 @@ state/
 # macOS
 .DS_Store
 
-# Refresh gate (se gestiona en CI, no commitear manualmente)
-.last_refresh_date
+# Refresh gate - se commitea para rastrear último refresh exitoso
+# .last_refresh_date
 
 # Logs
 *.log
