@@ -47,9 +47,16 @@ const KEYWORD_TOKENS = {
   sustainability: ['#sustainability', 'sustainability', 'sostenibilidad', 'sustentabilidad'],
 };
 
-// URL de búsqueda fallback si hashtags no dan suficientes posts
+// URLs de búsqueda con filtro de últimas 24 horas
+// datePosted=past-24h filtra solo posts de las últimas 24 horas
+const SEARCH_URLS = HASHTAGS.map(
+  (kw) =>
+    `https://www.linkedin.com/search/results/content/?keywords=%23${kw}&datePosted=%22past-24h%22&sortBy=%22date_posted%22`
+);
+
+// URL de búsqueda fallback combinada (también con filtro 24h)
 const SEARCH_FALLBACK_URL =
-  'https://www.linkedin.com/search/results/content/?keywords=esg%20climatetech%20sustainability';
+  'https://www.linkedin.com/search/results/content/?keywords=esg%20climatetech%20sustainability&datePosted=%22past-24h%22&sortBy=%22date_posted%22';
 
 // Configuración de scraping - AUMENTADO para mayor cobertura
 const SCROLL_COUNT = 10;       // Número de scrolls por hashtag/búsqueda
@@ -1241,14 +1248,17 @@ async function main() {
       accepted: 0,
     };
 
-    // ─── FASE 1: Scraping de hashtags ───
+    // ─── FASE 1: Búsqueda de contenido con filtro de últimas 24 horas ───
     console.log('\n' + '─'.repeat(60));
-    console.log('FASE 1: Scraping de hashtags');
+    console.log('FASE 1: Búsqueda de contenido (últimas 24 horas)');
     console.log('─'.repeat(60));
 
-    for (const hashtag of HASHTAGS) {
-      const hashtagUrl = `https://www.linkedin.com/feed/hashtag/${hashtag}/`;
-      const result = await scrapePage(page, hashtagUrl, `#${hashtag}`, seenUrls);
+    for (let i = 0; i < HASHTAGS.length; i++) {
+      const hashtag = HASHTAGS[i];
+      const searchUrl = SEARCH_URLS[i];
+      console.log(`\n🔍 Buscando #${hashtag} (filtro: últimas 24h)...`);
+
+      const result = await scrapePage(page, searchUrl, `#${hashtag}`, seenUrls);
 
       if (result.checkpointDetected) {
         checkpointDetected = true;
@@ -1266,11 +1276,12 @@ async function main() {
       globalStats.accepted += result.stats.accepted;
     }
 
-    // ─── FASE 2: Fallback a búsqueda si no hay suficientes posts ───
+    // ─── FASE 2: Fallback a búsqueda combinada si no hay suficientes posts ───
     if (!checkpointDetected && allPosts.length < MIN_POSTS_DESIRED) {
       console.log('\n' + '─'.repeat(60));
-      console.log(`FASE 2: Fallback - Búsqueda de contenido (tenemos ${allPosts.length} posts, necesitamos ${MIN_POSTS_DESIRED})`);
+      console.log(`FASE 2: Fallback - Búsqueda combinada (tenemos ${allPosts.length} posts, necesitamos ${MIN_POSTS_DESIRED})`);
       console.log('─'.repeat(60));
+      console.log('🔍 Buscando combinación de keywords (filtro: últimas 24h)...');
 
       const searchResult = await scrapePage(page, SEARCH_FALLBACK_URL, 'search_fallback', seenUrls);
 
