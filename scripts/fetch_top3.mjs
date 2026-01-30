@@ -37,6 +37,16 @@ const DEBUG_DIR = 'debug';
  */
 const HASHTAGS = ['esg', 'climatetech', 'sustainability'];
 
+/**
+ * Tokens de keyword para verificar que el post CONTIENE la keyword objetivo.
+ * Esto filtra "actividad" (comentarios en otros posts) que no mencionan la keyword.
+ */
+const KEYWORD_TOKENS = {
+  esg: ['#esg', ' esg ', ' esg.', ' esg,', '(esg)', 'esg-'],
+  climatetech: ['#climatetech', 'climate tech', 'climatetech', 'climate-tech'],
+  sustainability: ['#sustainability', 'sustainability', 'sostenibilidad', 'sustentabilidad'],
+};
+
 // URL de búsqueda fallback si hashtags no dan suficientes posts
 const SEARCH_FALLBACK_URL =
   'https://www.linkedin.com/search/results/content/?keywords=esg%20climatetech%20sustainability';
@@ -48,6 +58,13 @@ const CARDS_PER_SOURCE = 60;   // Máximo de cards a procesar por fuente
 
 // Mínimo de posts únicos deseados
 const MIN_POSTS_DESIRED = 3;
+
+// Mínimo de caracteres para snippet válido
+const MIN_SNIPPET_LENGTH = 40;
+
+// Verificación de posts: visitar cada URL para confirmar que es original
+const VERIFY_POSTS = true;
+const VERIFY_DELAY = 2000; // ms entre verificaciones
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURACIÓN COMPARTIDA (debe coincidir con login_once.mjs)
@@ -159,6 +176,450 @@ function normalizeUrl(url) {
  */
 function calcScore(post) {
   return (post.likes || 0) + (post.comments || 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VERIFICACIÓN DE POSTS ORIGINALES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Visita un post individual y extrae los datos REALES del autor original.
+ * Esta es la forma más fiable de asegurar que capturamos el post original.
+ *
+ * @param {Page} page - Página de Playwright
+ * @param {string} postUrl - URL del post a verificar
+ * @returns {Promise<{isOriginal: boolean, realAuthor: string, realLikes: number, realComments: number, realReposts: number, realSnippet: string}>}
+ */
+async function verifyAndExtractPost(page, postUrl) {
+  const result = {
+    isOriginal: false,
+    realAuthor: '',
+    realLikes: 0,
+    realComments: 0,
+    realReposts: 0,
+    realSnippet: '',
+  };
+
+  try {
+    console.log(`      🔍 Verificando: ${postUrl}`);
+    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForTimeout(2000);
+
+    // Detectar si es un repost mirando la estructura de la página
+    // En un repost, hay un header que dice "X reposted this" o similar
+    const pageContent = await page.content();
+    const pageText = await page.innerText('body').catch(() => '');
+
+    // Patrones de repost en la página del post
+    const repostIndicators = [
+      /reposted\s+this/i,
+      /compartió\s+esto/i,
+      /volvió\s+a\s+publicar/i,
+      /shared\s+this/i,
+    ];
+
+    for (const pattern of repostIndicators) {
+      if (pattern.test(pageText.substring(0, 1000))) {
+        console.log(`      ❌ Es un REPOST (detectado en página)`);
+        return result;
+      }
+    }
+
+    // Buscar el header de repost específico de LinkedIn
+    const repostHeader = await page.$('.feed-shared-header, .update-components-header');
+    if (repostHeader) {
+      const headerText = await repostHeader.innerText().catch(() => '');
+      for (const pattern of repostIndicators) {
+        if (pattern.test(headerText)) {
+          console.log(`      ❌ Es un REPOST (header detectado)`);
+          return result;
+        }
+      }
+    }
+
+    // Extraer el autor REAL del post
+    const authorSelectors = [
+      '.update-components-actor__name span[aria-hidden="true"]',
+      '.feed-shared-actor__name span[aria-hidden="true"]',
+      'span.update-components-actor__name',
+      'span.feed-shared-actor__name',
+      '.update-components-actor__title span:first-child',
+    ];
+
+    for (const selector of authorSelectors) {
+      try {
+        const el = await page.$(selector);
+        if (el) {
+          const text = await el.innerText().catch(() => '');
+          if (text && text.trim().length > 1) {
+            result.realAuthor = text.trim().split('\n')[0].trim();
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    // Extraer el snippet REAL del post
+    const snippetSelectors = [
+      '.feed-shared-update-v2__description',
+      '.update-components-text',
+      '.feed-shared-text',
+      'div[data-test-id="main-feed-activity-card__commentary"]',
+    ];
+
+    for (const selector of snippetSelectors) {
+      try {
+        const el = await page.$(selector);
+        if (el) {
+          const text = await el.innerText().catch(() => '');
+          if (text && text.trim().length > 20) {
+            result.realSnippet = cleanSnippet(text.trim());
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    // Extraer métricas REALES
+    try {
+      // Likes/Reactions
+      const reactionsEl = await page.$('.social-details-social-counts__reactions-count');
+      if (reactionsEl) {
+        const text = await reactionsEl.innerText().catch(() => '');
+        result.realLikes = parseNumber(text);
+      }
+
+      // Buscar en el área de social counts
+      const socialCounts = await page.$('.social-details-social-counts');
+      if (socialCounts) {
+        const countsText = await socialCounts.innerText().catch(() => '');
+
+        // Comments
+        const commentsMatch = countsText.match(/(\d+(?:[.,]\d+)?[kKmM]?)\s*(?:comment|comentario)/i);
+        if (commentsMatch) {
+          result.realComments = parseNumber(commentsMatch[1]);
+        }
+
+        // Reposts
+        const repostsMatch = countsText.match(/(\d+(?:[.,]\d+)?[kKmM]?)\s*(?:repost|compartido)/i);
+        if (repostsMatch) {
+          result.realReposts = parseNumber(repostsMatch[1]);
+        }
+      }
+    } catch {}
+
+    // Si llegamos aquí y tenemos autor, es un post original
+    if (result.realAuthor) {
+      result.isOriginal = true;
+      console.log(`      ✅ Post ORIGINAL de: ${result.realAuthor} (${result.realLikes} likes)`);
+    } else {
+      console.log(`      ⚠️ No se pudo extraer autor`);
+    }
+
+  } catch (err) {
+    console.log(`      ⚠️ Error verificando post: ${err.message}`);
+  }
+
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DETECCIÓN DE ACTIVIDAD (comentarios, likes, reposts de otros)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Detecta si una card es de "actividad" (no un post original).
+ * Busca patrones como "comentó", "commented on", "liked", etc.
+ * NOTA: NO incluimos "reposted/shared/compartió" aquí porque se manejan aparte
+ * @param {string} cardText - Texto completo de la card
+ * @returns {boolean} true si es actividad (no post original)
+ */
+function isActivityCard(cardText) {
+  if (!cardText) return false;
+
+  // Patrones de actividad en español e inglés (case-insensitive)
+  // EXCLUIMOS repost/shared/compartió - se filtran con isRepostByText()
+  const activityPatterns = [
+    // Español
+    /\bcomentó\b/i,
+    /\bcomentó en\b/i,
+    /\ble gustó\b/i,
+    /\breaccionó\b/i,
+    /\bcelebró\b/i,
+    /\brecomendó\b/i,
+    /\brespondi[oó]\b/i,
+    // Inglés
+    /\bcommented on\b/i,
+    /\breplied to\b/i,
+    /\bliked\b/i,
+    /\blikes this\b/i,
+    /\breacted to\b/i,
+    /\bcelebrated\b/i,
+    /\brecommended\b/i,
+    /\bfollows\b/i,
+    /\bfound this interesting\b/i,
+    /\bsupports this\b/i,
+    /\bloves this\b/i,
+    /\bfunny\b/i,
+  ];
+
+  for (const pattern of activityPatterns) {
+    if (pattern.test(cardText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Detecta si el HEADER de la card indica que es un repost/share.
+ * Busca específicamente en las primeras líneas del texto.
+ * @param {string} cardText - Texto completo de la card
+ * @returns {boolean} true si es un repost
+ */
+function isRepostByText(cardText) {
+  if (!cardText) return false;
+
+  // Solo mirar las primeras 500 caracteres (el header de la card)
+  const headerText = cardText.substring(0, 500).toLowerCase();
+
+  // Patrones que indican repost en el header
+  const repostPatterns = [
+    /reposted\s+this/i,
+    /reposted$/im,           // "X reposted" al final de una línea
+    /\breposted\b/i,
+    /\bshared\s+this\b/i,
+    /\bshared\s+a\s+post\b/i,
+    /\bcompartió\s+esto\b/i,
+    /\bcompartió\s+una\s+publicación\b/i,
+    /\bha\s+compartido\b/i,
+    /\bvolvió\s+a\s+publicar\b/i,
+  ];
+
+  for (const pattern of repostPatterns) {
+    if (pattern.test(headerText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Detecta si una card es un repost/compartido (no el post original).
+ * Usa múltiples métodos: texto de header, selectores CSS, clases.
+ * @param {ElementHandle} card - Elemento de la card
+ * @param {string} cardText - Texto completo de la card (ya extraído)
+ * @returns {Promise<boolean>} true si es un repost
+ */
+async function isRepostCard(card, cardText) {
+  try {
+    // Método 0: Detección por texto del header (MÁS FIABLE)
+    if (isRepostByText(cardText)) {
+      return true;
+    }
+
+    // Método 1: Buscar el header de "X reposted" o "X compartió"
+    const headerSelectors = [
+      '.update-components-header',
+      '.feed-shared-header',
+      '.update-components-actor__description',
+      '.update-components-header__text-view',
+    ];
+
+    for (const selector of headerSelectors) {
+      const header = await card.$(selector);
+      if (header) {
+        const headerText = await header.innerText().catch(() => '');
+        const repostPatterns = [
+          /reposted/i,
+          /shared/i,
+          /compartió/i,
+          /ha compartido/i,
+          /volvió a publicar/i,
+        ];
+        for (const pattern of repostPatterns) {
+          if (pattern.test(headerText)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    // Método 2: Detectar si hay un post embebido (mini-update dentro de la card)
+    const embeddedSelectors = [
+      '.update-components-mini-update-v2',
+      '.feed-shared-mini-update-v2',
+      '.update-components-update-v2__embedded-content',
+      '.feed-shared-reshared-update-v2',
+    ];
+
+    for (const selector of embeddedSelectors) {
+      const embedded = await card.$(selector);
+      if (embedded) {
+        return true;
+      }
+    }
+
+    // Método 3: Buscar clase específica de repost en la card
+    const cardClass = await card.getAttribute('class').catch(() => '');
+    if (cardClass && (cardClass.includes('repost') || cardClass.includes('reshare'))) {
+      return true;
+    }
+
+    // Método 4: Buscar data-attributes que indiquen repost
+    const dataRepost = await card.getAttribute('data-is-repost').catch(() => null);
+    if (dataRepost === 'true') {
+      return true;
+    }
+
+    // Método 5: Detectar múltiples autores en la card (indicador de repost)
+    // Si hay más de un nombre de actor, probablemente es un repost
+    const actorElements = await card.$$('.update-components-actor__name, .feed-shared-actor__name');
+    if (actorElements.length > 1) {
+      return true;
+    }
+
+    // Método 6: Buscar estructuras de "shared from" o "via"
+    // En el contenido del card, buscar patrones de atribución a otro autor
+    const attributionPatterns = [
+      /\bvia\s+@/i,
+      /\bshared\s+from\b/i,
+      /\boriginally\s+posted\s+by\b/i,
+      /\bde\s+@\w+/i,  // "de @usuario" en español
+    ];
+
+    for (const pattern of attributionPatterns) {
+      if (pattern.test(cardText)) {
+        return true;
+      }
+    }
+
+    // Método 7: Detectar múltiples URLs de posts en la misma card
+    // Si hay más de una URL de post, probablemente es un repost
+    const allLinks = await card.$$('a[href]');
+    const postUrls = [];
+    const profileUrls = [];
+
+    for (const link of allLinks) {
+      const href = await link.getAttribute('href').catch(() => null);
+      if (!href) continue;
+
+      // URLs de posts
+      if (
+        href.includes('/feed/update/') ||
+        href.includes('/posts/') ||
+        href.includes('urn:li:activity')
+      ) {
+        const normalized = href.split('?')[0];
+        if (!postUrls.includes(normalized)) {
+          postUrls.push(normalized);
+        }
+      }
+
+      // URLs de perfiles (personas o empresas)
+      if (href.includes('/in/') || href.includes('/company/')) {
+        const normalized = href.split('?')[0];
+        if (!profileUrls.includes(normalized)) {
+          profileUrls.push(normalized);
+        }
+      }
+    }
+
+    // Si hay más de una URL de post diferente, es un repost
+    if (postUrls.length > 1) {
+      return true;
+    }
+
+  } catch {}
+
+  return false;
+}
+
+/**
+ * Verifica si el texto contiene la keyword objetivo
+ * @param {string} text - Texto a verificar (snippet + cardText)
+ * @param {string} hashtag - Hashtag sin # (ej: "esg")
+ * @returns {boolean} true si contiene la keyword
+ */
+function containsKeyword(text, hashtag) {
+  if (!text || !hashtag) return false;
+
+  const tokens = KEYWORD_TOKENS[hashtag.toLowerCase()] || [`#${hashtag}`, hashtag];
+  const textLower = text.toLowerCase();
+
+  for (const token of tokens) {
+    if (textLower.includes(token.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Detecta si un post probablemente es un repost basándose en las URLs de perfil.
+ * Heurística: si hay un link a una empresa/organización prominente que no es
+ * donde trabaja el autor (basándose en que no aparece en su bio), probablemente es un repost.
+ *
+ * @param {string} author - Nombre del autor detectado
+ * @param {string[]} profileUrls - URLs de perfiles encontradas en la card
+ * @param {string} cardText - Texto completo de la card para contexto
+ * @returns {boolean} true si probablemente es un repost
+ */
+function isProbableRepost(author, profileUrls, cardText = '') {
+  if (!author || !profileUrls || profileUrls.length === 0) return false;
+
+  // Normalizar nombre del autor para comparación
+  const authorNormalized = author.toLowerCase()
+    .replace(/[áàäâ]/g, 'a')
+    .replace(/[éèëê]/g, 'e')
+    .replace(/[íìïî]/g, 'i')
+    .replace(/[óòöô]/g, 'o')
+    .replace(/[úùüû]/g, 'u')
+    .replace(/[^a-z0-9\s]/g, '');
+
+  const authorParts = authorNormalized.split(/\s+/).filter(p => p.length > 2);
+
+  // Contar empresas sin relación con el autor
+  let unrelatedCompanies = [];
+
+  for (const url of profileUrls) {
+    if (url.includes('/company/') && !url.includes('/posts')) {
+      // Extraer slug de la empresa
+      const match = url.match(/\/company\/([^/]+)/);
+      if (match) {
+        const companySlug = match[1].toLowerCase().replace(/-/g, '');
+
+        // Verificar si el slug tiene alguna relación con el nombre del autor
+        const hasAuthorRelation = authorParts.some(part =>
+          part.length > 2 && companySlug.includes(part)
+        );
+
+        if (!hasAuthorRelation) {
+          unrelatedCompanies.push(match[1]);
+        }
+      }
+    }
+  }
+
+  // Si hay empresas sin relación con el autor, verificar si aparecen prominentemente
+  // Una empresa prominente que no es del autor sugiere que es contenido de esa empresa (repost)
+  if (unrelatedCompanies.length > 0) {
+    // Verificar si la primera empresa sin relación aparece temprano en las URLs
+    const firstUnrelatedCompany = unrelatedCompanies[0];
+    const companyUrl = profileUrls.find(u => u.includes(`/company/${firstUnrelatedCompany}`));
+    const companyIndex = profileUrls.indexOf(companyUrl);
+
+    // Si la empresa sin relación aparece en las primeras 4 URLs, probablemente es un repost
+    // porque normalmente el autor aparece primero
+    if (companyIndex >= 0 && companyIndex < 4) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,16 +797,27 @@ async function saveDebugFiles(page, source, reason) {
  * @param {string} url - URL a visitar
  * @param {string} source - Nombre de la fuente (para logs y keyword)
  * @param {Set<string>} seenUrls - URLs ya vistas (para deduplicar)
- * @returns {{ posts: Array, checkpointDetected: boolean }}
+ * @returns {{ posts: Array, checkpointDetected: boolean, stats: Object }}
  */
 async function scrapePage(page, url, source, seenUrls) {
   console.log(`\n📍 Navegando a: ${url}`);
+
+  // Stats de filtrado
+  const stats = {
+    totalCards: 0,
+    discardedActivity: 0,
+    discardedRepost: 0,
+    discardedNoKeyword: 0,
+    discardedShortSnippet: 0,
+    discardedNoUrl: 0,
+    accepted: 0,
+  };
 
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (err) {
     console.log(`   ⚠️ Error cargando página: ${err?.message || String(err)}`);
-    return { posts: [], checkpointDetected: false };
+    return { posts: [], checkpointDetected: false, stats };
   }
 
   await page.waitForTimeout(3000);
@@ -358,7 +830,7 @@ async function scrapePage(page, url, source, seenUrls) {
     console.log('\n   ❌ CHECKPOINT/LOGIN DETECTADO');
     console.log('   La sesión ha expirado o LinkedIn requiere verificación.');
     await saveDebugFiles(page, source, 'checkpoint_detected');
-    return { posts: [], checkpointDetected: true };
+    return { posts: [], checkpointDetected: true, stats };
   }
 
   // Scroll más agresivo
@@ -398,21 +870,43 @@ async function scrapePage(page, url, source, seenUrls) {
   if (cards.length === 0) {
     console.log('   ⚠️ No se encontraron cards con ninguna estrategia');
     await saveDebugFiles(page, source, 'no_cards_found');
-    return { posts: [], checkpointDetected: false };
+    return { posts: [], checkpointDetected: false, stats };
   }
 
   const posts = [];
   const cardsToProcess = cards.slice(0, CARDS_PER_SOURCE);
+  stats.totalCards = cardsToProcess.length;
+
+  // Extraer hashtag de source (ej: "#esg" -> "esg")
+  const hashtag = source.startsWith('#') ? source.substring(1) : source;
 
   for (const card of cardsToProcess) {
     try {
-      const post = await extractPostData(card, source);
+      const result = await extractPostData(card, source, hashtag);
+
+      if (result === null) {
+        // Ya se contó en extractPostData
+        continue;
+      }
+
+      if (result.discardReason) {
+        // Contar razón de descarte
+        if (result.discardReason === 'activity') stats.discardedActivity++;
+        else if (result.discardReason === 'repost') stats.discardedRepost++;
+        else if (result.discardReason === 'no_keyword') stats.discardedNoKeyword++;
+        else if (result.discardReason === 'short_snippet') stats.discardedShortSnippet++;
+        else if (result.discardReason === 'no_url') stats.discardedNoUrl++;
+        continue;
+      }
+
+      const post = result.post;
       if (post && post.url) {
         const normalized = normalizeUrl(post.url);
         // Solo añadir si no está ya visto
         if (!seenUrls.has(normalized)) {
           seenUrls.add(normalized);
           posts.push(post);
+          stats.accepted++;
         }
       }
     } catch {}
@@ -420,38 +914,117 @@ async function scrapePage(page, url, source, seenUrls) {
 
   console.log(`   ✓ Extraídos ${posts.length} posts nuevos (únicos)`);
 
+  // Imprimir resumen de filtrado
+  console.log(`\n   ┌── RESUMEN FILTRADO ─────────────────────────────`);
+  console.log(`   │ Cards procesadas: ${stats.totalCards}`);
+  console.log(`   │ ❌ Descartadas por actividad: ${stats.discardedActivity}`);
+  console.log(`   │ ❌ Descartadas por repost: ${stats.discardedRepost}`);
+  console.log(`   │ ❌ Descartadas sin keyword: ${stats.discardedNoKeyword}`);
+  console.log(`   │ ❌ Descartadas snippet corto: ${stats.discardedShortSnippet}`);
+  console.log(`   │ ❌ Descartadas sin URL: ${stats.discardedNoUrl}`);
+  console.log(`   │ ✅ Aceptadas: ${stats.accepted}`);
+  console.log(`   └──────────────────────────────────────────────────`);
+
   if (posts.length === 0 && cards.length > 0) {
     await saveDebugFiles(page, source, 'cards_found_but_no_new_posts_extracted');
   }
 
-  return { posts, checkpointDetected: false };
+  return { posts, checkpointDetected: false, stats };
 }
 
-async function extractPostData(card, source) {
-  // URL
-  const allLinks = await card.$$('a[href]');
+/**
+ * Extrae datos de un post de una card
+ * @param {ElementHandle} card - Elemento de la card
+ * @param {string} source - Fuente (ej: "#esg")
+ * @param {string} hashtag - Hashtag sin # (ej: "esg")
+ * @returns {Object|null} { post, discardReason } o null
+ */
+async function extractPostData(card, source, hashtag) {
+  // Obtener texto completo de la card para filtros
+  const cardText = await card.innerText().catch(() => '');
+
+  // DEBUG: Imprimir primeras 200 chars del cardText para ver formato (deshabilitado)
+  // const debugHeader = cardText.substring(0, 200).replace(/\n/g, '\\n');
+  // console.log(`      [DEBUG] Card: ${debugHeader}...`);
+
+  // 1) Filtrar actividad (comentarios, likes, reposts de otros)
+  if (isActivityCard(cardText)) {
+    return { discardReason: 'activity' };
+  }
+
+  // 2) Detectar si es un repost - si lo es, DESCARTAR (no intentar extraer embebido)
+  const isRepost = await isRepostCard(card, cardText);
+
+  // NUEVO ENFOQUE: Descartar reposts directamente en lugar de intentar extraer el embebido
+  // Los selectores de embebido no funcionan bien y terminamos capturando la info del que compartió
+  if (isRepost) {
+    return { discardReason: 'repost' };
+  }
+
+  // A partir de aquí, la card NO es un repost, es un post original
+  // Extraer datos directamente de la card
+
+  // URL - MÚLTIPLES ESTRATEGIAS
   let url = null;
 
-  for (const link of allLinks) {
-    const href = await link.getAttribute('href').catch(() => null);
-    if (href && (
-      href.includes('/feed/update/') ||
-      href.includes('/posts/') ||
-      href.includes('urn:li:activity')
-    )) {
-      url = href.startsWith('http') ? href : `https://www.linkedin.com${href}`;
-      break;
+  // Estrategia 1: Extraer del data-urn de la card (más fiable)
+  try {
+    const dataUrn = await card.getAttribute('data-urn');
+    if (dataUrn && dataUrn.includes('urn:li:activity:')) {
+      url = `https://www.linkedin.com/feed/update/${dataUrn}/`;
+    }
+  } catch {}
+
+  // Estrategia 2: Buscar en links de la card
+  if (!url) {
+    const allLinks = await card.$$('a[href]');
+    for (const link of allLinks) {
+      const href = await link.getAttribute('href').catch(() => null);
+      if (href && (
+        href.includes('/feed/update/') ||
+        href.includes('/posts/') ||
+        href.includes('urn:li:activity')
+      )) {
+        url = href.startsWith('http') ? href : `https://www.linkedin.com${href}`;
+        break;
+      }
     }
   }
-  if (!url) return null;
 
-  // Autor
+  // Estrategia 3: Buscar data-urn en elementos hijos
+  if (!url) {
+    try {
+      const urnElement = await card.$('[data-urn*="urn:li:activity:"]');
+      if (urnElement) {
+        const dataUrn = await urnElement.getAttribute('data-urn');
+        if (dataUrn) {
+          url = `https://www.linkedin.com/feed/update/${dataUrn}/`;
+        }
+      }
+    } catch {}
+  }
+
+  // Estrategia 4: Buscar en el texto de la card por patrones de URL
+  if (!url) {
+    const urnMatch = cardText.match(/urn:li:activity:(\d+)/);
+    if (urnMatch) {
+      url = `https://www.linkedin.com/feed/update/urn:li:activity:${urnMatch[1]}/`;
+    }
+  }
+
+  if (!url) {
+    return { discardReason: 'no_url' };
+  }
+
+  // Obtener todos los links para extracción posterior de perfiles
+  const allLinks = await card.$$('a[href]');
+
+  // Autor - buscar en la card
   const authorSelectors = [
     'span.update-components-actor__name',
     'span.feed-shared-actor__name',
     '.update-components-actor__title span[aria-hidden="true"]',
     '.feed-shared-actor__title span[aria-hidden="true"]',
-    'a.app-aware-link span[dir="ltr"]',
     '.update-components-actor__name span',
     'span.hoverable-link-text',
   ];
@@ -467,17 +1040,36 @@ async function extractPostData(card, source) {
     } catch {}
   }
 
-  // Snippet
+  // Extraer URLs de perfiles para verificación de repost
+  const profileUrls = [];
+  for (const link of allLinks) {
+    const href = await link.getAttribute('href').catch(() => null);
+    if (!href) continue;
+    if (href.includes('/in/') || href.includes('/company/')) {
+      const normalized = href.split('?')[0];
+      if (!profileUrls.includes(normalized)) {
+        profileUrls.push(normalized);
+      }
+    }
+  }
+
+  // Verificación adicional: detectar probable repost por análisis de URLs de perfil
+  if (author && isProbableRepost(author, profileUrls, cardText)) {
+    return { discardReason: 'repost' };
+  }
+
+  // Snippet - PRIORIZAR selectores de commentary/descripción del post
   const textSelectors = [
-    'div.update-components-text',
-    'div.feed-shared-update-v2__description',
-    'span.break-words',
-    '.feed-shared-text',
+    'div.update-components-update-v2__commentary',  // Comentario del autor
+    'div.feed-shared-update-v2__description',       // Descripción del post
+    'div.update-components-text',                   // Texto genérico
     'div.feed-shared-text',
+    'span.break-words',
     '.update-components-text span[dir="ltr"]',
   ];
 
   let snippet = '';
+
   for (const selector of textSelectors) {
     try {
       const el = await card.$(selector);
@@ -487,91 +1079,82 @@ async function extractPostData(card, source) {
     } catch {}
   }
 
+  // Fallback al texto de la card
   if (!snippet) {
-    try {
-      const cardText = await card.innerText().catch(() => '');
-      if (cardText) snippet = cleanSnippet(cardText);
-    } catch {}
+    snippet = cleanSnippet(cardText);
   }
 
-  // Likes
+  // 2) Filtrar por snippet corto
+  if (snippet.length < MIN_SNIPPET_LENGTH) {
+    return { discardReason: 'short_snippet' };
+  }
+
+  // 3) Filtrar si no contiene keyword (solo para hashtags, no para search_fallback)
+  if (hashtag && hashtag !== 'search_fallback') {
+    const textToCheck = (snippet + ' ' + cardText).toLowerCase();
+    if (!containsKeyword(textToCheck, hashtag)) {
+      return { discardReason: 'no_keyword' };
+    }
+  }
+
+  // ─── EXTRACCIÓN DE MÉTRICAS ───
+  // Simplificado: solo extraemos likes de forma confiable
+  // Comments y reposts se dejan en 0 por ahora (los regex capturan basura)
+
   let likes = 0;
-  const likesSelectors = [
-    'button[aria-label*="reaction"]',
-    'button[aria-label*="like"]',
-    'button[aria-label*="Reaction"]',
-    'button[aria-label*="Like"]',
-    'span.social-details-social-counts__reactions-count',
-    '.reactions-count',
-  ];
-  for (const selector of likesSelectors) {
-    try {
-      const el = await card.$(selector);
-      if (!el) continue;
-      const ariaLabel = await el.getAttribute('aria-label').catch(() => '');
-      if (ariaLabel) {
-        const extracted = extractNumberFromAriaLabel(ariaLabel);
-        if (extracted > 0) { likes = extracted; break; }
-      }
-      const text = await el.innerText().catch(() => '');
-      if (text) {
-        const extracted = parseNumber(text);
-        if (extracted > 0) { likes = extracted; break; }
-      }
-    } catch {}
-  }
-
-  // Comments
   let comments = 0;
-  const commentsSelectors = [
-    'button[aria-label*="comment"]',
-    'button[aria-label*="Comment"]',
-    'li.social-details-social-counts__comments button',
-    '.comments-count',
-  ];
-  for (const selector of commentsSelectors) {
-    try {
-      const el = await card.$(selector);
-      if (!el) continue;
-      const ariaLabel = await el.getAttribute('aria-label').catch(() => '');
-      if (ariaLabel) {
-        const extracted = extractNumberFromAriaLabel(ariaLabel);
-        if (extracted > 0) { comments = extracted; break; }
+  let reposts = 0;
+
+  // Buscar el contador de reacciones (likes) - es el más confiable
+  try {
+    // Método 1: span específico de reactions count
+    const reactionsSpan = await card.$('span.social-details-social-counts__reactions-count');
+    if (reactionsSpan) {
+      const text = await reactionsSpan.innerText().catch(() => '');
+      const num = parseNumber(text);
+      if (num > 0 && num < 1000000) {
+        likes = num;
       }
-      const text = await el.innerText().catch(() => '');
-      if (text) {
-        const extracted = parseNumber(text);
-        if (extracted > 0) { comments = extracted; break; }
+    }
+  } catch {}
+
+  // Método 2: Si no encontramos el span, buscar en el botón de reacciones
+  if (likes === 0) {
+    try {
+      const socialCounts = await card.$('.social-details-social-counts');
+      if (socialCounts) {
+        // Buscar el primer número que aparece (suele ser las reacciones)
+        const text = await socialCounts.innerText().catch(() => '');
+        const firstNumMatch = text.match(/^[\s]*(\d+)/);
+        if (firstNumMatch) {
+          const num = parseInt(firstNumMatch[1], 10);
+          if (num > 0 && num < 1000000) {
+            likes = num;
+          }
+        }
       }
     } catch {}
   }
 
-  // Reposts
-  let reposts = 0;
-  const repostsSelectors = [
-    'button[aria-label*="repost"]',
-    'button[aria-label*="Repost"]',
-    'button[aria-label*="share"]',
-    'button[aria-label*="Share"]',
-    'li.social-details-social-counts__shares button',
-    '.shares-count',
-  ];
-  for (const selector of repostsSelectors) {
-    try {
-      const el = await card.$(selector);
-      if (!el) continue;
-      const ariaLabel = await el.getAttribute('aria-label').catch(() => '');
-      if (ariaLabel) {
-        const extracted = extractNumberFromAriaLabel(ariaLabel);
-        if (extracted > 0) { reposts = extracted; break; }
+  // Para comments: buscar específicamente "X comment" o "X comentario"
+  try {
+    const socialCounts = await card.$('.social-details-social-counts');
+    if (socialCounts) {
+      const text = await socialCounts.innerText().catch(() => '');
+      // Patrón más estricto: número seguido directamente de "comment"
+      const commentsMatch = text.match(/(\d+)\s*comment/i);
+      if (commentsMatch) {
+        const num = parseInt(commentsMatch[1], 10);
+        if (num > 0 && num < 10000) {
+          comments = num;
+        }
       }
-      const text = await el.innerText().catch(() => '');
-      if (text) {
-        const extracted = parseNumber(text);
-        if (extracted > 0) { reposts = extracted; break; }
-      }
-    } catch {}
-  }
+    }
+  } catch {}
+
+  // Reposts: deshabilitado por ahora - los regex capturan números incorrectos
+  // TODO: investigar mejor selector para reposts
+  reposts = 0;
 
   const total = likes + comments + reposts;
 
@@ -584,15 +1167,17 @@ async function extractPostData(card, source) {
   }
 
   return {
-    url,
-    author: author || '',
-    title: author || 'Publicación LinkedIn',
-    snippet,
-    likes,
-    comments,
-    reposts,
-    total,
-    keyword,
+    post: {
+      url,
+      author: author || '',
+      title: author || 'Publicación LinkedIn',
+      snippet,
+      likes,
+      comments,
+      reposts,
+      total,
+      keyword,
+    }
   };
 }
 
@@ -616,6 +1201,7 @@ async function main() {
   console.log(`🔍 Fallback: búsqueda de contenido si < ${MIN_POSTS_DESIRED} posts`);
   console.log(`📜 Scroll: ${SCROLL_COUNT}x por fuente, hasta ${CARDS_PER_SOURCE} cards`);
   console.log(`🖥️  Modo: ${USE_HEADFUL ? 'HEADED (xvfb)' : 'headless'}`);
+  console.log(`📏 Snippet mínimo: ${MIN_SNIPPET_LENGTH} caracteres`);
 
   const browser = await chromium.launch({
     headless: !USE_HEADFUL,
@@ -644,6 +1230,17 @@ async function main() {
     const seenUrls = new Set(); // Deduplicación global
     let checkpointDetected = false;
 
+    // Stats globales
+    const globalStats = {
+      totalCards: 0,
+      discardedActivity: 0,
+      discardedRepost: 0,
+      discardedNoKeyword: 0,
+      discardedShortSnippet: 0,
+      discardedNoUrl: 0,
+      accepted: 0,
+    };
+
     // ─── FASE 1: Scraping de hashtags ───
     console.log('\n' + '─'.repeat(60));
     console.log('FASE 1: Scraping de hashtags');
@@ -658,6 +1255,15 @@ async function main() {
         break;
       }
       allPosts.push(...result.posts);
+
+      // Acumular stats
+      globalStats.totalCards += result.stats.totalCards;
+      globalStats.discardedActivity += result.stats.discardedActivity;
+      globalStats.discardedRepost += result.stats.discardedRepost;
+      globalStats.discardedNoKeyword += result.stats.discardedNoKeyword;
+      globalStats.discardedShortSnippet += result.stats.discardedShortSnippet;
+      globalStats.discardedNoUrl += result.stats.discardedNoUrl;
+      globalStats.accepted += result.stats.accepted;
     }
 
     // ─── FASE 2: Fallback a búsqueda si no hay suficientes posts ───
@@ -672,10 +1278,33 @@ async function main() {
         checkpointDetected = true;
       } else {
         allPosts.push(...searchResult.posts);
+
+        // Acumular stats
+        globalStats.totalCards += searchResult.stats.totalCards;
+        globalStats.discardedActivity += searchResult.stats.discardedActivity;
+        globalStats.discardedRepost += searchResult.stats.discardedRepost;
+        globalStats.discardedNoKeyword += searchResult.stats.discardedNoKeyword;
+        globalStats.discardedShortSnippet += searchResult.stats.discardedShortSnippet;
+        globalStats.discardedNoUrl += searchResult.stats.discardedNoUrl;
+        globalStats.accepted += searchResult.stats.accepted;
       }
     } else if (!checkpointDetected) {
       console.log(`\n✓ Suficientes posts de hashtags (${allPosts.length}), no se necesita fallback`);
     }
+
+    // ─── RESUMEN GLOBAL DE FILTRADO ───
+    console.log('\n' + '═'.repeat(60));
+    console.log('RESUMEN GLOBAL DE FILTRADO');
+    console.log('═'.repeat(60));
+    console.log(`   📊 Total cards procesadas: ${globalStats.totalCards}`);
+    console.log(`   ❌ Descartadas por actividad: ${globalStats.discardedActivity}`);
+    console.log(`   ❌ Descartadas por repost: ${globalStats.discardedRepost}`);
+    console.log(`   ❌ Descartadas sin keyword: ${globalStats.discardedNoKeyword}`);
+    console.log(`   ❌ Descartadas snippet corto (<${MIN_SNIPPET_LENGTH} chars): ${globalStats.discardedShortSnippet}`);
+    console.log(`   ❌ Descartadas sin URL: ${globalStats.discardedNoUrl}`);
+    console.log(`   ✅ Posts válidos aceptados: ${globalStats.accepted}`);
+    console.log(`   📝 Posts únicos finales: ${allPosts.length}`);
+    console.log('═'.repeat(60));
 
     // ─── CHECKPOINT DETECTADO: SALIR SIN ESCRIBIR ───
     if (checkpointDetected) {
@@ -687,6 +1316,48 @@ async function main() {
       console.log('\n⚠️  NO se ha modificado public/data.json\n');
       process.exitCode = 2;
       return;
+    }
+
+    // ─── FASE 3: VERIFICACIÓN DE POSTS ORIGINALES ───
+    // Visitamos cada post para confirmar que es original y extraer datos reales
+    if (VERIFY_POSTS && allPosts.length > 0) {
+      console.log('\n' + '─'.repeat(60));
+      console.log('FASE 3: Verificación de posts originales');
+      console.log('─'.repeat(60));
+      console.log(`   Verificando ${allPosts.length} posts candidatos...`);
+
+      const verifiedPosts = [];
+
+      for (const post of allPosts) {
+        const verification = await verifyAndExtractPost(page, post.url);
+
+        if (verification.isOriginal) {
+          // Actualizar con datos reales del post
+          const realAuthor = verification.realAuthor || post.author;
+          verifiedPosts.push({
+            ...post,
+            author: realAuthor,
+            title: realAuthor, // Sincronizar title con author
+            likes: verification.realLikes || post.likes,
+            comments: verification.realComments || post.comments,
+            reposts: verification.realReposts || post.reposts,
+            snippet: verification.realSnippet || post.snippet,
+            total: (verification.realLikes || post.likes) +
+                   (verification.realComments || post.comments) +
+                   (verification.realReposts || post.reposts),
+            verified: true,
+          });
+        }
+
+        // Delay entre verificaciones para no sobrecargar
+        await page.waitForTimeout(VERIFY_DELAY);
+      }
+
+      console.log(`\n   ✅ Posts verificados como originales: ${verifiedPosts.length}/${allPosts.length}`);
+
+      // Reemplazar allPosts con los verificados
+      allPosts.length = 0;
+      allPosts.push(...verifiedPosts);
     }
 
     // ─── SELECCIÓN DE TOP 3 DEL DÍA ───
