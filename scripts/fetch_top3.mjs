@@ -3,7 +3,7 @@
  *
  * Extrae posts de LinkedIn usando sesión persistida y genera:
  * - public/data.json: top 3 del día
- * - public/history.json: histórico acumulado de posts
+ * - public/history.json: histórico de los top 3 de cada día
  * - public/top10.json: top 10 all-time por engagement
  *
  * Uso: npm run fetch
@@ -1427,16 +1427,16 @@ async function main() {
     await writeFile(OUTPUT_PATH, JSON.stringify(output, null, 2), 'utf8');
     console.log(`\n✅ Top 3 del día guardado en: ${OUTPUT_PATH}`);
 
-    // ─── ACTUALIZAR HISTÓRICO ───
+    // ─── ACTUALIZAR HISTÓRICO (solo Top 3 de cada día) ───
     console.log('\n' + '─'.repeat(60));
-    console.log('ACTUALIZANDO HISTÓRICO');
+    console.log('ACTUALIZANDO HISTÓRICO (Top 3 de cada día)');
     console.log('─'.repeat(60));
 
     let history = await loadHistory();
     const historyBefore = history.length;
 
-    // Añadir todos los posts del día (no solo top 3)
-    history = mergeHistory(history, allPosts, today);
+    // Solo añadir los Top 3 del día al histórico
+    history = mergeHistory(history, top3, today);
     const newPostsAdded = history.length - historyBefore;
 
     await writeFile(HISTORY_PATH, JSON.stringify(history, null, 2), 'utf8');
