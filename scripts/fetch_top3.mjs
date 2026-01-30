@@ -49,14 +49,15 @@ const KEYWORD_TOKENS = {
 
 // URLs de búsqueda con filtro de últimas 24 horas
 // datePosted=past-24h filtra solo posts de las últimas 24 horas
+// Sin sortBy para obtener los más relevantes/populares (no los más recientes)
 const SEARCH_URLS = HASHTAGS.map(
   (kw) =>
-    `https://www.linkedin.com/search/results/content/?keywords=%23${kw}&datePosted=%22past-24h%22&sortBy=%22date_posted%22`
+    `https://www.linkedin.com/search/results/content/?keywords=%23${kw}&datePosted=%22past-24h%22`
 );
 
 // URL de búsqueda fallback combinada (también con filtro 24h)
 const SEARCH_FALLBACK_URL =
-  'https://www.linkedin.com/search/results/content/?keywords=esg%20climatetech%20sustainability&datePosted=%22past-24h%22&sortBy=%22date_posted%22';
+  'https://www.linkedin.com/search/results/content/?keywords=esg%20climatetech%20sustainability&datePosted=%22past-24h%22';
 
 // Configuración de scraping - AUMENTADO para mayor cobertura
 const SCROLL_COUNT = 10;       // Número de scrolls por hashtag/búsqueda
@@ -213,35 +214,67 @@ async function verifyAndExtractPost(page, postUrl) {
     await page.waitForTimeout(2000);
 
     // Detectar si es un repost mirando la estructura de la página
-    // En un repost, hay un header que dice "X reposted this" o similar
     const pageContent = await page.content();
     const pageText = await page.innerText('body').catch(() => '');
 
-    // Patrones de repost en la página del post
+    // Patrones de repost en la página del post (múltiples idiomas)
     const repostIndicators = [
       /reposted\s+this/i,
+      /reposted$/im,
+      /\breposted\b/i,
       /compartió\s+esto/i,
+      /compartió$/im,
+      /ha\s+compartido/i,
       /volvió\s+a\s+publicar/i,
       /shared\s+this/i,
+      /a\s+partagé/i,
+      /hat\s+geteilt/i,
+      /ha\s+condiviso/i,
     ];
 
+    // Buscar en los primeros 2000 caracteres del texto
+    const textToCheck = pageText.substring(0, 2000);
     for (const pattern of repostIndicators) {
-      if (pattern.test(pageText.substring(0, 1000))) {
-        console.log(`      ❌ Es un REPOST (detectado en página)`);
+      if (pattern.test(textToCheck)) {
+        console.log(`      ❌ Es un REPOST (patrón: ${pattern})`);
         return result;
       }
     }
 
     // Buscar el header de repost específico de LinkedIn
-    const repostHeader = await page.$('.feed-shared-header, .update-components-header');
-    if (repostHeader) {
-      const headerText = await repostHeader.innerText().catch(() => '');
-      for (const pattern of repostIndicators) {
-        if (pattern.test(headerText)) {
-          console.log(`      ❌ Es un REPOST (header detectado)`);
-          return result;
+    const repostHeaderSelectors = [
+      '.feed-shared-header',
+      '.update-components-header',
+      '.feed-shared-actor__sub-description',
+      '.update-components-actor__sub-description',
+    ];
+
+    for (const selector of repostHeaderSelectors) {
+      const repostHeader = await page.$(selector);
+      if (repostHeader) {
+        const headerText = await repostHeader.innerText().catch(() => '');
+        for (const pattern of repostIndicators) {
+          if (pattern.test(headerText)) {
+            console.log(`      ❌ Es un REPOST (header: "${headerText.substring(0, 50)}")`);
+            return result;
+          }
         }
       }
+    }
+
+    // Verificar si hay un "post dentro de post" (estructura de repost)
+    // LinkedIn muestra el post original anidado dentro del repost
+    const nestedPost = await page.$$('.feed-shared-update-v2__update-content-wrapper .feed-shared-update-v2');
+    if (nestedPost && nestedPost.length > 0) {
+      console.log(`      ❌ Es un REPOST (post anidado detectado)`);
+      return result;
+    }
+
+    // Verificar si hay múltiples autores (indicador de repost)
+    const authorElements = await page.$$('.update-components-actor__name, .feed-shared-actor__name');
+    if (authorElements && authorElements.length > 1) {
+      console.log(`      ❌ Es un REPOST (múltiples autores detectados)`);
+      return result;
     }
 
     // Extraer el autor REAL del post
