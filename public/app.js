@@ -1,22 +1,71 @@
 // LinkedIn-style Observatorio ESG App
 
-(async function () {
-  const feedContent = document.getElementById('feed-content');
-  const lastUpdatedEl = document.getElementById('last-updated');
-  const sidebarTotal = document.getElementById('sidebar-total');
-  const sidebarDays = document.getElementById('sidebar-days');
-  const totalPostsBadge = document.getElementById('total-posts-badge');
-  const keywordsList = document.getElementById('keywords-list');
-  const tabButtons = document.querySelectorAll('.tab-btn');
+(function () {
+  // Token de acceso (hash simple para no tenerlo en texto plano)
+  const TOKEN_HASH = 'a3f8c2e9d1b4';
 
-  let todayData = null;
-  let historyData = null;
-  let top10Data = null;
-  let currentTab = 'today';
+  function hashToken(token) {
+    // Hash simple para verificación
+    let hash = 0;
+    for (let i = 0; i < token.length; i++) {
+      const char = token.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash).toString(16).substring(0, 12);
+  }
 
-  // Initialize
-  await loadAllData();
-  setupTabs();
+  // Verificar si ya está logueado
+  const savedToken = localStorage.getItem('esg_token');
+  const isLoggedIn = savedToken && hashToken(savedToken) === TOKEN_HASH;
+
+  const loginScreen = document.getElementById('login-screen');
+  const mainApp = document.getElementById('main-app');
+  const loginForm = document.getElementById('login-form');
+  const loginError = document.getElementById('login-error');
+
+  if (isLoggedIn) {
+    loginScreen.classList.add('hidden');
+    mainApp.classList.remove('hidden');
+    initApp();
+  } else {
+    loginScreen.classList.remove('hidden');
+    mainApp.classList.add('hidden');
+  }
+
+  // Login form handler
+  loginForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const tokenInput = document.getElementById('login-token').value;
+
+    if (hashToken(tokenInput) === TOKEN_HASH) {
+      localStorage.setItem('esg_token', tokenInput);
+      loginScreen.classList.add('hidden');
+      mainApp.classList.remove('hidden');
+      loginError.textContent = '';
+      initApp();
+    } else {
+      loginError.textContent = 'Token incorrecto';
+    }
+  });
+
+  async function initApp() {
+    const feedContent = document.getElementById('feed-content');
+    const lastUpdatedEl = document.getElementById('last-updated');
+    const sidebarTotal = document.getElementById('sidebar-total');
+    const sidebarDays = document.getElementById('sidebar-days');
+    const totalPostsBadge = document.getElementById('total-posts-badge');
+    const keywordsList = document.getElementById('keywords-list');
+    const tabButtons = document.querySelectorAll('.tab-btn');
+
+    let todayData = null;
+    let historyData = null;
+    let top10Data = null;
+    let currentTab = 'today';
+
+    // Initialize
+    await loadAllData();
+    setupTabs();
 
   async function loadAllData() {
     try {
@@ -368,4 +417,5 @@
       </div>
     `;
   }
+  } // end initApp
 })();

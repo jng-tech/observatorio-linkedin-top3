@@ -10,6 +10,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+  <!-- Login Screen -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <img src="https://cdn.prod.website-files.com/6321ffbc871a0f60deca5c75/68f75ff4a5608fe77ad51049_logo_dcycle.png" alt="Dcycle" class="login-logo">
+      <h1>Observatorio ESG</h1>
+      <p>Introduce el token de acceso</p>
+      <form id="login-form">
+        <input type="password" id="login-token" placeholder="Token" required>
+        <button type="submit">Acceder</button>
+      </form>
+      <p id="login-error" class="login-error"></p>
+    </div>
+  </div>
+
+  <!-- Main App (hidden until login) -->
+  <div id="main-app" class="main-app hidden">
   <!-- LinkedIn-style navbar -->
   <nav class="navbar">
     <div class="navbar-container">
@@ -121,6 +137,7 @@
       </div>
     </aside>
   </div>
+  </div><!-- end main-app -->
 
   <script src="app.js"></script>
 </body>
