@@ -57,9 +57,8 @@ body {
 }
 
 .logo-icon {
-  width: 34px;
-  height: 34px;
-  color: var(--linkedin-blue);
+  height: 32px;
+  width: auto;
 }
 
 .brand-text {
