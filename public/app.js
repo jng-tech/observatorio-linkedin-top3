@@ -2,7 +2,7 @@
 
 (function () {
   // Token de acceso (hash simple para no tenerlo en texto plano)
-  const TOKEN_HASH = 'a3f8c2e9d1b4';
+  const TOKEN_HASH = '4933410a';
 
   function hashToken(token) {
     // Hash simple para verificación
