@@ -221,14 +221,15 @@
     if (!posts || !Array.isArray(posts)) return [];
 
     return posts.filter(post => {
-      // Language filter
-      const postLang = post.language || 'EN';
-      if (postLang !== currentLanguage) return false;
+      // Language filter - only apply if post has language field (new data)
+      // Old data without language field will show regardless of filter
+      if (post.language && post.language !== currentLanguage) {
+        return false;
+      }
 
-      // Keyword filter
-      if (currentKeyword !== 'global') {
-        const postKeywordId = post.keywordId || '';
-        if (postKeywordId !== currentKeyword) return false;
+      // Keyword filter - only apply if post has keywordId field (new data)
+      if (currentKeyword !== 'global' && post.keywordId) {
+        if (post.keywordId !== currentKeyword) return false;
       }
 
       // Search filter
