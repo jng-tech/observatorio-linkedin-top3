@@ -57,15 +57,25 @@
     const totalPostsBadge = document.getElementById('total-posts-badge');
     const keywordsList = document.getElementById('keywords-list');
     const tabButtons = document.querySelectorAll('.tab-btn');
+    const languageToggle = document.getElementById('language-toggle');
+    const keywordsSelector = document.getElementById('keywords-selector');
+    const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear');
 
     let todayData = null;
     let historyData = null;
     let top10Data = null;
     let currentTab = 'today';
+    let currentLanguage = 'ES'; // Default language filter
+    let currentKeyword = 'global'; // Default keyword filter
+    let searchQuery = ''; // Search query
 
     // Initialize
     await loadAllData();
     setupTabs();
+    setupLanguageToggle();
+    setupKeywordsSelector();
+    setupSearch();
 
   async function loadAllData() {
     try {
@@ -126,10 +136,14 @@
     sidebarDays.textContent = uniqueDays.size;
     totalPostsBadge.textContent = `${totalPosts} posts`;
 
-    // Update keywords
+    // Update keywords in sidebar
     if (todayData && todayData.keywords) {
       keywordsList.innerHTML = todayData.keywords
-        .map(kw => `<span class="keyword-tag">${escapeHtml(kw)}</span>`)
+        .map(kw => {
+          // Handle both old format (string) and new format ({id, label})
+          const label = typeof kw === 'object' ? kw.label : kw;
+          return `<span class="keyword-tag">${escapeHtml(label)}</span>`;
+        })
         .join('');
     }
   }
@@ -142,6 +156,92 @@
         currentTab = btn.dataset.tab;
         renderCurrentTab();
       });
+    });
+  }
+
+  function setupLanguageToggle() {
+    const langButtons = languageToggle.querySelectorAll('.lang-btn');
+    langButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        langButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentLanguage = btn.dataset.lang;
+        renderCurrentTab();
+      });
+    });
+  }
+
+  function setupKeywordsSelector() {
+    // Populate keywords from data
+    if (todayData && todayData.keywords && Array.isArray(todayData.keywords)) {
+      // New format: array of {id, label}
+      const keywordsHtml = todayData.keywords.map(kw => {
+        if (typeof kw === 'object' && kw.id) {
+          return `<button class="keyword-btn" data-keyword="${kw.id}">${escapeHtml(kw.label)}</button>`;
+        } else {
+          // Old format: string
+          return `<button class="keyword-btn" data-keyword="${kw}">${escapeHtml(kw)}</button>`;
+        }
+      }).join('');
+
+      keywordsSelector.innerHTML = `
+        <button class="keyword-btn active" data-keyword="global">Global</button>
+        ${keywordsHtml}
+      `;
+    }
+
+    // Add click handlers
+    keywordsSelector.addEventListener('click', (e) => {
+      if (e.target.classList.contains('keyword-btn')) {
+        keywordsSelector.querySelectorAll('.keyword-btn').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+        currentKeyword = e.target.dataset.keyword;
+        renderCurrentTab();
+      }
+    });
+  }
+
+  function setupSearch() {
+    searchInput.addEventListener('input', (e) => {
+      searchQuery = e.target.value.toLowerCase().trim();
+      searchClear.classList.toggle('hidden', !searchQuery);
+      renderCurrentTab();
+    });
+
+    searchClear.addEventListener('click', () => {
+      searchInput.value = '';
+      searchQuery = '';
+      searchClear.classList.add('hidden');
+      renderCurrentTab();
+    });
+  }
+
+  // Filter posts by language, keyword, and search query
+  function filterPosts(posts) {
+    if (!posts || !Array.isArray(posts)) return [];
+
+    return posts.filter(post => {
+      // Language filter
+      const postLang = post.language || 'EN';
+      if (postLang !== currentLanguage) return false;
+
+      // Keyword filter
+      if (currentKeyword !== 'global') {
+        const postKeywordId = post.keywordId || '';
+        if (postKeywordId !== currentKeyword) return false;
+      }
+
+      // Search filter
+      if (searchQuery) {
+        const author = (post.author || '').toLowerCase();
+        const snippet = (post.snippet || '').toLowerCase();
+        const keyword = (post.keyword || '').toLowerCase();
+        if (!author.includes(searchQuery) && !snippet.includes(searchQuery) && !keyword.includes(searchQuery)) {
+          return false;
+        }
+      }
+
+      return true;
     });
   }
 
@@ -160,42 +260,55 @@
   }
 
   function renderTodayTop3() {
-    if (!todayData || !todayData.posts || todayData.posts.length === 0) {
+    // Use allPosts if available (new format), otherwise fall back to posts
+    const sourcePosts = todayData?.allPosts || todayData?.posts || [];
+    const filteredPosts = filterPosts(sourcePosts);
+
+    // Sort by engagement and take top 3
+    const top3 = filteredPosts
+      .sort((a, b) => (b.total || 0) - (a.total || 0))
+      .slice(0, 3);
+
+    if (top3.length === 0) {
+      const filterInfo = currentKeyword !== 'global' ? ` para "${currentKeyword}"` : '';
       feedContent.innerHTML = `
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>
           </svg>
-          <h3>No hay posts de hoy</h3>
-          <p>Los datos se actualizaran proximamente.</p>
+          <h3>No hay posts${filterInfo}</h3>
+          <p>No se encontraron posts en ${currentLanguage}${filterInfo}. Prueba cambiando los filtros.</p>
         </div>
       `;
       return;
     }
 
-    const dateStr = todayData.date ? formatDate(todayData.date) : 'Hoy';
+    const dateStr = todayData?.date ? formatDate(todayData.date) : 'Hoy';
+    const keywordLabel = currentKeyword !== 'global' ? ` - ${currentKeyword.toUpperCase()}` : '';
 
     feedContent.innerHTML = `
       <div class="top3-header">
-        <h2>Top 3 del dia</h2>
+        <h2>Top 3 del dia (${currentLanguage})${keywordLabel}</h2>
         <p>${dateStr}</p>
       </div>
-      ${todayData.posts.slice(0, 3).map((post, i) => renderPostCard(post, i + 1, true)).join('')}
+      ${top3.map((post, i) => renderPostCard(post, i + 1, true)).join('')}
     `;
   }
 
   function renderHistoryFeed() {
     // Handle both array format and object with entries format
-    const posts = historyData ? (Array.isArray(historyData) ? historyData : (historyData.entries || [])) : [];
+    const allPosts = historyData ? (Array.isArray(historyData) ? historyData : (historyData.entries || [])) : [];
+    const filteredPosts = filterPosts(allPosts);
 
-    if (!posts || posts.length === 0) {
+    if (filteredPosts.length === 0) {
+      const filterInfo = currentKeyword !== 'global' ? ` para "${currentKeyword}"` : '';
       feedContent.innerHTML = `
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
           </svg>
-          <h3>Sin historial</h3>
-          <p>El historial de publicaciones aparecera aqui.</p>
+          <h3>Sin historial${filterInfo}</h3>
+          <p>No hay publicaciones en ${currentLanguage}${filterInfo}. Prueba cambiando los filtros.</p>
         </div>
       `;
       return;
@@ -203,7 +316,7 @@
 
     // Group posts by date
     const postsByDate = {};
-    posts.forEach(post => {
+    filteredPosts.forEach(post => {
       const date = post.date || 'Sin fecha';
       if (!postsByDate[date]) {
         postsByDate[date] = [];
@@ -234,37 +347,41 @@
       });
     });
 
-    feedContent.innerHTML = html || `
-      <div class="empty-state">
-        <h3>Sin publicaciones</h3>
-        <p>No hay publicaciones en el historial.</p>
-      </div>
-    `;
+    feedContent.innerHTML = html;
   }
 
   function renderTop10() {
     // Handle both array format and object with posts format
-    const posts = top10Data ? (Array.isArray(top10Data) ? top10Data : (top10Data.posts || [])) : [];
+    const allPosts = top10Data ? (Array.isArray(top10Data) ? top10Data : (top10Data.posts || [])) : [];
+    const filteredPosts = filterPosts(allPosts);
 
-    if (!posts || posts.length === 0) {
+    // Take top 10 from filtered posts
+    const top10 = filteredPosts
+      .sort((a, b) => (b.total || 0) - (a.total || 0))
+      .slice(0, 10);
+
+    if (top10.length === 0) {
+      const filterInfo = currentKeyword !== 'global' ? ` para "${currentKeyword}"` : '';
       feedContent.innerHTML = `
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
           </svg>
-          <h3>Top 10 no disponible</h3>
-          <p>El ranking all-time aparecera aqui.</p>
+          <h3>Top 10 no disponible${filterInfo}</h3>
+          <p>No hay publicaciones en ${currentLanguage}${filterInfo}. Prueba cambiando los filtros.</p>
         </div>
       `;
       return;
     }
 
+    const keywordLabel = currentKeyword !== 'global' ? ` - ${currentKeyword.toUpperCase()}` : '';
+
     feedContent.innerHTML = `
       <div class="top3-header" style="background: linear-gradient(135deg, #057642, #0a66c2);">
-        <h2>Top 10 All-Time</h2>
+        <h2>Top 10 All-Time (${currentLanguage})${keywordLabel}</h2>
         <p>Las publicaciones con mas engagement</p>
       </div>
-      ${posts.slice(0, 10).map((post, i) => renderPostCard(post, i + 1, true, true)).join('')}
+      ${top10.map((post, i) => renderPostCard(post, i + 1, true, true)).join('')}
     `;
   }
 

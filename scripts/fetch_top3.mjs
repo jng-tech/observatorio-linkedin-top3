@@ -72,7 +72,212 @@ const MIN_SNIPPET_LENGTH = 40;
 
 // Verificación de posts: visitar cada URL para confirmar que es original
 const VERIFY_POSTS = true;
-const VERIFY_DELAY = 2000; // ms entre verificaciones
+const VERIFY_DELAY = 3000; // ms entre verificaciones (aumentado para menor riesgo)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NUEVA CONFIGURACIÓN EXPANDIDA (v2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Keywords expandidas con variantes ES/EN
+ * Cada keyword tiene: id, términos de búsqueda, y tokens de verificación
+ */
+const KEYWORDS_CONFIG = [
+  {
+    id: 'esg',
+    label: 'ESG',
+    searchTerms: ['#esg', 'ESG'],
+    tokens: ['#esg', ' esg ', ' esg.', ' esg,', '(esg)', 'esg-', 'esg reporting', 'esg criteria'],
+  },
+  {
+    id: 'sustainability',
+    label: 'Sustainability',
+    searchTerms: ['#sustainability', '#sostenibilidad'],
+    tokens: ['#sustainability', 'sustainability', 'sostenibilidad', 'sustentabilidad', 'sustainable'],
+  },
+  {
+    id: 'climatetech',
+    label: 'Climate Tech',
+    searchTerms: ['#climatetech', 'climate tech'],
+    tokens: ['#climatetech', 'climatetech', 'climate tech', 'climate-tech', 'climatech'],
+  },
+  {
+    id: 'csrd',
+    label: 'CSRD',
+    searchTerms: ['CSRD', '#csrd'],
+    tokens: ['csrd', '#csrd', 'corporate sustainability reporting directive'],
+  },
+  {
+    id: 'esrs',
+    label: 'ESRS',
+    searchTerms: ['ESRS', '#esrs'],
+    tokens: ['esrs', '#esrs', 'european sustainability reporting standards'],
+  },
+  {
+    id: 'vsme',
+    label: 'VSME',
+    searchTerms: ['VSME', '#vsme'],
+    tokens: ['vsme', '#vsme', 'voluntary sme standard'],
+  },
+  {
+    id: 'non-financial-reporting',
+    label: 'Non-Financial Reporting',
+    searchTerms: ['non-financial reporting', 'información no financiera'],
+    tokens: ['non-financial reporting', 'non financial reporting', 'información no financiera', 'informe no financiero', 'nfrd'],
+  },
+  {
+    id: 'double-materiality',
+    label: 'Double Materiality',
+    searchTerms: ['double materiality', 'doble materialidad'],
+    tokens: ['double materiality', 'doble materialidad', 'materiality assessment', 'análisis de materialidad'],
+  },
+  {
+    id: 'lca',
+    label: 'LCA / ACV',
+    searchTerms: ['life cycle assessment', 'análisis ciclo vida', 'LCA'],
+    tokens: ['lca', 'acv', 'life cycle assessment', 'análisis ciclo vida', 'análisis de ciclo de vida', 'life-cycle assessment'],
+  },
+  {
+    id: 'scope-emissions',
+    label: 'Scope 1 2 3',
+    searchTerms: ['scope 1 2 3', 'scope emissions', 'alcance 1 2 3'],
+    tokens: ['scope 1', 'scope 2', 'scope 3', 'alcance 1', 'alcance 2', 'alcance 3', 'scope emissions', 'emisiones alcance'],
+  },
+  {
+    id: 'eu-taxonomy',
+    label: 'EU Taxonomy',
+    searchTerms: ['EU taxonomy', 'taxonomía europea', '#eutaxonomy'],
+    tokens: ['eu taxonomy', 'taxonomía europea', 'taxonomia europea', 'european taxonomy', '#eutaxonomy', 'taxonomy regulation'],
+  },
+  {
+    id: 'ghg-protocol',
+    label: 'GHG Protocol',
+    searchTerms: ['GHG protocol', 'protocolo GEI', '#ghgprotocol'],
+    tokens: ['ghg protocol', 'protocolo gei', 'greenhouse gas protocol', 'gases efecto invernadero', '#ghgprotocol'],
+  },
+  {
+    id: 'esg-data',
+    label: 'ESG Data',
+    searchTerms: ['ESG data', 'datos ESG', '#esgdata'],
+    tokens: ['esg data', 'datos esg', 'esg metrics', 'métricas esg', 'esg reporting data', '#esgdata'],
+  },
+];
+
+/**
+ * Genera URLs de búsqueda para todas las keywords
+ * Filtro: últimas 24 horas
+ */
+function generateSearchUrls() {
+  const urls = [];
+  for (const kw of KEYWORDS_CONFIG) {
+    for (const term of kw.searchTerms) {
+      const encoded = encodeURIComponent(term);
+      urls.push({
+        url: `https://www.linkedin.com/search/results/content/?keywords=${encoded}&datePosted=%22past-24h%22`,
+        keywordId: kw.id,
+        keywordLabel: kw.label,
+        searchTerm: term,
+      });
+    }
+  }
+  return urls;
+}
+
+const ALL_SEARCH_URLS = generateSearchUrls();
+
+/**
+ * Configuración de delays "humanos" para menor riesgo de detección
+ */
+const HUMAN_DELAYS = {
+  scrollDelayMin: 2000,        // ms mínimo entre scrolls
+  scrollDelayMax: 3500,        // ms máximo entre scrolls
+  searchDelayMin: 8000,        // ms mínimo entre búsquedas
+  searchDelayMax: 15000,       // ms máximo entre búsquedas
+  longPauseEvery: 5,           // cada N búsquedas, pausa larga
+  longPauseMin: 30000,         // ms mínimo pausa larga
+  longPauseMax: 60000,         // ms máximo pausa larga
+  scrollAmountMin: 800,        // px mínimo de scroll
+  scrollAmountMax: 1400,       // px máximo de scroll
+};
+
+/**
+ * Genera un delay aleatorio entre min y max
+ */
+function randomDelay(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/**
+ * Espera un tiempo aleatorio (simula comportamiento humano)
+ */
+async function humanWait(min, max) {
+  const delay = randomDelay(min, max);
+  await new Promise(resolve => setTimeout(resolve, delay));
+  return delay;
+}
+
+/**
+ * Detecta el idioma de un texto basándose en palabras comunes
+ * @param {string} text - Texto a analizar
+ * @returns {'ES' | 'EN'} - Idioma detectado
+ */
+function detectLanguage(text) {
+  if (!text) return 'EN';
+
+  const textLower = text.toLowerCase();
+
+  // Palabras comunes en español (más específicas para evitar falsos positivos)
+  const spanishWords = [
+    ' el ', ' la ', ' los ', ' las ', ' de ', ' del ', ' que ', ' en ', ' es ', ' un ', ' una ',
+    ' para ', ' con ', ' por ', ' su ', ' sus ', ' al ', ' se ', ' como ', ' más ', ' pero ',
+    ' este ', ' esta ', ' estos ', ' estas ', ' sobre ', ' entre ', ' también ', ' sido ',
+    ' hace ', ' hacia ', ' desde ', ' durante ', ' mediante ', ' según ', ' aunque ',
+    ' puede ', ' pueden ', ' debe ', ' deben ', ' tiene ', ' tienen ', ' está ', ' están ',
+    ' será ', ' serán ', ' siendo ', ' hemos ', ' nuestra ', ' nuestro ', ' empresa ', ' empresas ',
+  ];
+
+  // Palabras comunes en inglés
+  const englishWords = [
+    ' the ', ' is ', ' are ', ' was ', ' were ', ' be ', ' been ', ' being ',
+    ' have ', ' has ', ' had ', ' do ', ' does ', ' did ', ' will ', ' would ',
+    ' could ', ' should ', ' may ', ' might ', ' must ', ' shall ',
+    ' for ', ' and ', ' with ', ' that ', ' this ', ' from ', ' they ', ' we ',
+    ' our ', ' your ', ' their ', ' which ', ' when ', ' where ', ' how ', ' why ',
+    ' about ', ' into ', ' through ', ' during ', ' before ', ' after ',
+    ' company ', ' business ', ' report ', ' reporting ',
+  ];
+
+  let spanishScore = 0;
+  let englishScore = 0;
+
+  for (const word of spanishWords) {
+    if (textLower.includes(word)) spanishScore++;
+  }
+
+  for (const word of englishWords) {
+    if (textLower.includes(word)) englishScore++;
+  }
+
+  // Si hay más palabras en español, es español
+  return spanishScore > englishScore ? 'ES' : 'EN';
+}
+
+/**
+ * Verifica si el texto contiene tokens de una keyword específica
+ */
+function matchesKeyword(text, keywordId) {
+  if (!text || !keywordId) return false;
+
+  const config = KEYWORDS_CONFIG.find(k => k.id === keywordId);
+  if (!config) return false;
+
+  const textLower = text.toLowerCase();
+  return config.tokens.some(token => textLower.includes(token.toLowerCase()));
+}
+
+// Configuración actualizada de scraping (sobrescribe valores anteriores)
+const SCROLL_COUNT_V2 = 8;       // Scrolls por búsqueda (ligeramente reducido)
+const CARDS_PER_SOURCE_V2 = 40;  // Cards por fuente (reducido para mejor filtrado)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURACIÓN COMPARTIDA (debe coincidir con login_once.mjs)
@@ -720,6 +925,8 @@ function generateTop10(history) {
       author: post.author || '',
       snippet: post.snippet || '',
       keyword: post.keyword || '',
+      keywordId: post.keywordId || '',
+      language: post.language || 'EN',
       date: post.date || '',
       likes: post.likes || 0,
       comments: post.comments || 0,
@@ -873,16 +1080,20 @@ async function scrapePage(page, url, source, seenUrls) {
     return { posts: [], checkpointDetected: true, stats };
   }
 
-  // Scroll más agresivo
-  console.log(`   Haciendo scroll (${SCROLL_COUNT}x)...`);
-  for (let i = 0; i < SCROLL_COUNT; i++) {
+  // Scroll con comportamiento humano (delays y cantidades variables)
+  console.log(`   Haciendo scroll (${SCROLL_COUNT_V2}x con delays humanos)...`);
+  for (let i = 0; i < SCROLL_COUNT_V2; i++) {
     try {
       if (page.isClosed()) break;
-      await page.mouse.wheel(0, 1200);
-      await page.waitForTimeout(SCROLL_DELAY);
+      const scrollAmount = randomDelay(HUMAN_DELAYS.scrollAmountMin, HUMAN_DELAYS.scrollAmountMax);
+      await page.mouse.wheel(0, scrollAmount);
+      const waited = await humanWait(HUMAN_DELAYS.scrollDelayMin, HUMAN_DELAYS.scrollDelayMax);
+      if (i === Math.floor(SCROLL_COUNT_V2 / 2)) {
+        console.log(`   ... scroll ${i + 1}/${SCROLL_COUNT_V2} (delay: ${waited}ms)`);
+      }
     } catch {}
   }
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1500);
 
   // Diagnóstico
   await printDiagnostics(page, source);
@@ -914,7 +1125,7 @@ async function scrapePage(page, url, source, seenUrls) {
   }
 
   const posts = [];
-  const cardsToProcess = cards.slice(0, CARDS_PER_SOURCE);
+  const cardsToProcess = cards.slice(0, CARDS_PER_SOURCE_V2);
   stats.totalCards = cardsToProcess.length;
 
   // Extraer hashtag de source (ej: "#esg" -> "esg")
@@ -1200,11 +1411,22 @@ async function extractPostData(card, source, hashtag) {
 
   // Determinar keyword basado en fuente
   let keyword = source;
+  let keywordId = '';
   if (source.startsWith('#')) {
     keyword = source;
+    // Intentar encontrar el keywordId basado en el hashtag
+    const hashtagLower = source.substring(1).toLowerCase();
+    const matchedConfig = KEYWORDS_CONFIG.find(k => k.id === hashtagLower || k.searchTerms.some(t => t.toLowerCase().includes(hashtagLower)));
+    if (matchedConfig) {
+      keywordId = matchedConfig.id;
+    }
   } else if (source === 'search_fallback') {
     keyword = '#esg+climatetech+sustainability';
+    keywordId = 'global';
   }
+
+  // Detectar idioma del post basándose en el snippet
+  const language = detectLanguage(snippet);
 
   return {
     post: {
@@ -1217,6 +1439,8 @@ async function extractPostData(card, source, hashtag) {
       reposts,
       total,
       keyword,
+      keywordId,
+      language,
     }
   };
 }
@@ -1227,7 +1451,7 @@ async function extractPostData(card, source, hashtag) {
 
 async function main() {
   console.log('\n╔══════════════════════════════════════════════════════════════╗');
-  console.log('║         FETCH TOP 3 LINKEDIN (ESG x Tech)                    ║');
+  console.log('║     FETCH TOP 3 LINKEDIN (ESG x Tech) - v2 Expandido         ║');
   console.log('╚══════════════════════════════════════════════════════════════╝');
 
   if (!existsSync(STATE_PATH)) {
@@ -1237,11 +1461,14 @@ async function main() {
   }
 
   console.log(`\n📂 Usando sesión: ${STATE_PATH}`);
-  console.log(`🏷️  Hashtags: ${HASHTAGS.map(h => '#' + h).join(', ')}`);
-  console.log(`🔍 Fallback: búsqueda de contenido si < ${MIN_POSTS_DESIRED} posts`);
-  console.log(`📜 Scroll: ${SCROLL_COUNT}x por fuente, hasta ${CARDS_PER_SOURCE} cards`);
+  console.log(`🏷️  Keywords: ${KEYWORDS_CONFIG.length} (${KEYWORDS_CONFIG.map(k => k.label).join(', ')})`);
+  console.log(`🔍 Búsquedas totales: ${ALL_SEARCH_URLS.length}`);
+  console.log(`📜 Scroll: ${SCROLL_COUNT_V2}x por fuente, hasta ${CARDS_PER_SOURCE_V2} cards`);
+  console.log(`⏱️  Delays humanos: ${HUMAN_DELAYS.searchDelayMin/1000}-${HUMAN_DELAYS.searchDelayMax/1000}s entre búsquedas`);
+  console.log(`☕ Pausa larga cada ${HUMAN_DELAYS.longPauseEvery} búsquedas: ${HUMAN_DELAYS.longPauseMin/1000}-${HUMAN_DELAYS.longPauseMax/1000}s`);
   console.log(`🖥️  Modo: ${USE_HEADFUL ? 'HEADED (xvfb)' : 'headless'}`);
   console.log(`📏 Snippet mínimo: ${MIN_SNIPPET_LENGTH} caracteres`);
+  console.log(`\n⏳ Tiempo estimado: ~${Math.round(ALL_SEARCH_URLS.length * 2)} minutos`);
 
   const browser = await chromium.launch({
     headless: !USE_HEADFUL,
@@ -1281,22 +1508,32 @@ async function main() {
       accepted: 0,
     };
 
-    // ─── FASE 1: Búsqueda de contenido con filtro de últimas 24 horas ───
+    // ─── FASE 1: Búsqueda expandida con todas las keywords (v2) ───
     console.log('\n' + '─'.repeat(60));
-    console.log('FASE 1: Búsqueda de contenido (últimas 24 horas)');
+    console.log('FASE 1: Búsqueda expandida de contenido (últimas 24 horas)');
+    console.log(`Total de búsquedas: ${ALL_SEARCH_URLS.length} (${KEYWORDS_CONFIG.length} keywords)`);
     console.log('─'.repeat(60));
 
-    for (let i = 0; i < HASHTAGS.length; i++) {
-      const hashtag = HASHTAGS[i];
-      const searchUrl = SEARCH_URLS[i];
-      console.log(`\n🔍 Buscando #${hashtag} (filtro: últimas 24h)...`);
+    const startTime = Date.now();
 
-      const result = await scrapePage(page, searchUrl, `#${hashtag}`, seenUrls);
+    for (let i = 0; i < ALL_SEARCH_URLS.length; i++) {
+      const searchConfig = ALL_SEARCH_URLS[i];
+      console.log(`\n🔍 [${i + 1}/${ALL_SEARCH_URLS.length}] Buscando "${searchConfig.searchTerm}" (${searchConfig.keywordLabel})...`);
+
+      const result = await scrapePage(page, searchConfig.url, searchConfig.searchTerm, seenUrls);
 
       if (result.checkpointDetected) {
         checkpointDetected = true;
         break;
       }
+
+      // Añadir keywordId a los posts encontrados
+      for (const post of result.posts) {
+        if (!post.keywordId) {
+          post.keywordId = searchConfig.keywordId;
+        }
+      }
+
       allPosts.push(...result.posts);
 
       // Acumular stats
@@ -1307,34 +1544,25 @@ async function main() {
       globalStats.discardedShortSnippet += result.stats.discardedShortSnippet;
       globalStats.discardedNoUrl += result.stats.discardedNoUrl;
       globalStats.accepted += result.stats.accepted;
-    }
 
-    // ─── FASE 2: Fallback a búsqueda combinada si no hay suficientes posts ───
-    if (!checkpointDetected && allPosts.length < MIN_POSTS_DESIRED) {
-      console.log('\n' + '─'.repeat(60));
-      console.log(`FASE 2: Fallback - Búsqueda combinada (tenemos ${allPosts.length} posts, necesitamos ${MIN_POSTS_DESIRED})`);
-      console.log('─'.repeat(60));
-      console.log('🔍 Buscando combinación de keywords (filtro: últimas 24h)...');
-
-      const searchResult = await scrapePage(page, SEARCH_FALLBACK_URL, 'search_fallback', seenUrls);
-
-      if (searchResult.checkpointDetected) {
-        checkpointDetected = true;
-      } else {
-        allPosts.push(...searchResult.posts);
-
-        // Acumular stats
-        globalStats.totalCards += searchResult.stats.totalCards;
-        globalStats.discardedActivity += searchResult.stats.discardedActivity;
-        globalStats.discardedRepost += searchResult.stats.discardedRepost;
-        globalStats.discardedNoKeyword += searchResult.stats.discardedNoKeyword;
-        globalStats.discardedShortSnippet += searchResult.stats.discardedShortSnippet;
-        globalStats.discardedNoUrl += searchResult.stats.discardedNoUrl;
-        globalStats.accepted += searchResult.stats.accepted;
+      // Delay entre búsquedas (comportamiento humano)
+      if (i < ALL_SEARCH_URLS.length - 1) {
+        // Pausa larga cada N búsquedas
+        if ((i + 1) % HUMAN_DELAYS.longPauseEvery === 0) {
+          const longPause = randomDelay(HUMAN_DELAYS.longPauseMin, HUMAN_DELAYS.longPauseMax);
+          console.log(`\n   ☕ Pausa larga: ${Math.round(longPause / 1000)}s (búsqueda ${i + 1}/${ALL_SEARCH_URLS.length})`);
+          await new Promise(resolve => setTimeout(resolve, longPause));
+        } else {
+          // Delay normal entre búsquedas
+          const delay = await humanWait(HUMAN_DELAYS.searchDelayMin, HUMAN_DELAYS.searchDelayMax);
+          console.log(`   ⏳ Esperando ${Math.round(delay / 1000)}s antes de siguiente búsqueda...`);
+        }
       }
-    } else if (!checkpointDetected) {
-      console.log(`\n✓ Suficientes posts de hashtags (${allPosts.length}), no se necesita fallback`);
     }
+
+    const elapsedMinutes = Math.round((Date.now() - startTime) / 60000);
+    console.log(`\n✓ Fase 1 completada en ~${elapsedMinutes} minutos`);
+    console.log(`✓ Posts recopilados: ${allPosts.length}`);
 
     // ─── RESUMEN GLOBAL DE FILTRADO ───
     console.log('\n' + '═'.repeat(60));
@@ -1378,6 +1606,9 @@ async function main() {
         if (verification.isOriginal) {
           // Actualizar con datos reales del post
           const realAuthor = verification.realAuthor || post.author;
+          const realSnippet = verification.realSnippet || post.snippet;
+          // Re-detectar idioma con el snippet real (más preciso)
+          const detectedLanguage = detectLanguage(realSnippet);
           verifiedPosts.push({
             ...post,
             author: realAuthor,
@@ -1385,7 +1616,8 @@ async function main() {
             likes: verification.realLikes || post.likes,
             comments: verification.realComments || post.comments,
             reposts: verification.realReposts || post.reposts,
-            snippet: verification.realSnippet || post.snippet,
+            snippet: realSnippet,
+            language: detectedLanguage,
             total: (verification.realLikes || post.likes) +
                    (verification.realComments || post.comments) +
                    (verification.realReposts || post.reposts),
@@ -1441,7 +1673,8 @@ async function main() {
       top3.forEach((p, i) => {
         const metrics = (p.total || 0) > 0 ? `${p.total} interacciones` : `${(p.snippet || '').length} chars`;
         const authorDisplay = p.author || 'Autor desconocido';
-        console.log(`   ${i + 1}. ${authorDisplay} (${metrics}) - ${p.keyword}`);
+        const lang = p.language || 'EN';
+        console.log(`   ${i + 1}. [${lang}] ${authorDisplay} (${metrics}) - ${p.keywordId || p.keyword}`);
       });
     }
 
@@ -1452,8 +1685,9 @@ async function main() {
     const output = {
       lastUpdated: new Date().toISOString(),
       date: today,
-      keywords: HASHTAGS.map(h => `#${h}`),
+      keywords: KEYWORDS_CONFIG.map(k => ({ id: k.id, label: k.label })),
       posts: top3,
+      allPosts: allPosts, // Todos los posts del día (para filtrado en frontend)
     };
 
     await mkdir('public', { recursive: true });
