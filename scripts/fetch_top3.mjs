@@ -79,16 +79,10 @@ const VERIFY_DELAY = 3000; // ms entre verificaciones (aumentado para menor ries
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Keywords expandidas con variantes ES/EN
+ * Keywords seleccionadas (6 keywords)
  * Cada keyword tiene: id, términos de búsqueda, y tokens de verificación
  */
 const KEYWORDS_CONFIG = [
-  {
-    id: 'esg',
-    label: 'ESG',
-    searchTerms: ['#esg', 'ESG'],
-    tokens: ['#esg', ' esg ', ' esg.', ' esg,', '(esg)', 'esg-', 'esg reporting', 'esg criteria'],
-  },
   {
     id: 'sustainability',
     label: 'Sustainability',
@@ -108,52 +102,16 @@ const KEYWORDS_CONFIG = [
     tokens: ['csrd', '#csrd', 'corporate sustainability reporting directive'],
   },
   {
-    id: 'esrs',
-    label: 'ESRS',
-    searchTerms: ['ESRS', '#esrs'],
-    tokens: ['esrs', '#esrs', 'european sustainability reporting standards'],
-  },
-  {
-    id: 'vsme',
-    label: 'VSME',
-    searchTerms: ['VSME', '#vsme'],
-    tokens: ['vsme', '#vsme', 'voluntary sme standard'],
-  },
-  {
-    id: 'non-financial-reporting',
-    label: 'Non-Financial Reporting',
-    searchTerms: ['non-financial reporting', 'información no financiera'],
-    tokens: ['non-financial reporting', 'non financial reporting', 'información no financiera', 'informe no financiero', 'nfrd'],
-  },
-  {
     id: 'double-materiality',
     label: 'Double Materiality',
     searchTerms: ['double materiality', 'doble materialidad'],
     tokens: ['double materiality', 'doble materialidad', 'materiality assessment', 'análisis de materialidad'],
   },
   {
-    id: 'lca',
-    label: 'LCA / ACV',
-    searchTerms: ['life cycle assessment', 'análisis ciclo vida', 'LCA'],
-    tokens: ['lca', 'acv', 'life cycle assessment', 'análisis ciclo vida', 'análisis de ciclo de vida', 'life-cycle assessment'],
-  },
-  {
-    id: 'scope-emissions',
-    label: 'Scope 1 2 3',
-    searchTerms: ['scope 1 2 3', 'scope emissions', 'alcance 1 2 3'],
-    tokens: ['scope 1', 'scope 2', 'scope 3', 'alcance 1', 'alcance 2', 'alcance 3', 'scope emissions', 'emisiones alcance'],
-  },
-  {
-    id: 'eu-taxonomy',
-    label: 'EU Taxonomy',
-    searchTerms: ['EU taxonomy', 'taxonomía europea', '#eutaxonomy'],
-    tokens: ['eu taxonomy', 'taxonomía europea', 'taxonomia europea', 'european taxonomy', '#eutaxonomy', 'taxonomy regulation'],
-  },
-  {
-    id: 'ghg-protocol',
-    label: 'GHG Protocol',
-    searchTerms: ['GHG protocol', 'protocolo GEI', '#ghgprotocol'],
-    tokens: ['ghg protocol', 'protocolo gei', 'greenhouse gas protocol', 'gases efecto invernadero', '#ghgprotocol'],
+    id: 'non-financial-reporting',
+    label: 'Non-Financial Reporting',
+    searchTerms: ['non-financial reporting', 'información no financiera'],
+    tokens: ['non-financial reporting', 'non financial reporting', 'información no financiera', 'informe no financiero', 'nfrd'],
   },
   {
     id: 'esg-data',
@@ -185,9 +143,9 @@ function generateSearchUrls() {
 
 const ALL_SEARCH_URLS_FULL = generateSearchUrls();
 
-// QUICK_TEST=1 limita a 3 keywords para pruebas rápidas (~8 minutos)
+// QUICK_TEST=1 limita a 2 keywords para pruebas rápidas (~5 minutos)
 const QUICK_TEST = process.env.QUICK_TEST === '1';
-const QUICK_TEST_KEYWORDS = ['esg', 'sustainability', 'climatetech'];
+const QUICK_TEST_KEYWORDS = ['sustainability', 'climatetech'];
 
 const ALL_SEARCH_URLS = QUICK_TEST
   ? ALL_SEARCH_URLS_FULL.filter(u => QUICK_TEST_KEYWORDS.includes(u.keywordId))
