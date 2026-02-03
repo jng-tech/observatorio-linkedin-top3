@@ -183,7 +183,15 @@ function generateSearchUrls() {
   return urls;
 }
 
-const ALL_SEARCH_URLS = generateSearchUrls();
+const ALL_SEARCH_URLS_FULL = generateSearchUrls();
+
+// QUICK_TEST=1 limita a 3 keywords para pruebas rápidas (~8 minutos)
+const QUICK_TEST = process.env.QUICK_TEST === '1';
+const QUICK_TEST_KEYWORDS = ['esg', 'sustainability', 'climatetech'];
+
+const ALL_SEARCH_URLS = QUICK_TEST
+  ? ALL_SEARCH_URLS_FULL.filter(u => QUICK_TEST_KEYWORDS.includes(u.keywordId))
+  : ALL_SEARCH_URLS_FULL;
 
 /**
  * Configuración de delays "humanos" para menor riesgo de detección
